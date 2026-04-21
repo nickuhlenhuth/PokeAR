@@ -119,7 +119,10 @@ async function ensureTesseractWorker() {
     state.tesseractWorker = await Tesseract.createWorker('eng');
     await state.tesseractWorker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz \'',
-      tessedit_pageseg_mode: '7',
+      // PSM 6 = "single uniform block of text". The name band usually contains
+      // two lines ("Basic Pokémon" subtitle + the actual Pokemon name), which
+      // PSM 7 ("single line") can't handle and silently returns empty on.
+      tessedit_pageseg_mode: '6',
     });
     state.tesseractReady = true;
     console.log('[capture] Tesseract ready');
@@ -175,7 +178,12 @@ async function onCapture() {
     hideCameraMsg();
 
     console.log('[capture] OCR reads:', result.reads, 'debug:', result.debug);
-    state.lastDebugImage = result.debug?.nameBandDataUrl || null;
+    state.lastDebugImages = result.debug ? {
+      raw: result.debug.nameBandDataUrl,
+      thresholdA: result.debug.thresholdADataUrl,
+      thresholdB: result.debug.thresholdBDataUrl,
+      reads: result.reads,
+    } : null;
 
     if (!result.match) {
       const readSamples = result.reads.map(r => r.text).filter(Boolean);
@@ -251,6 +259,7 @@ async function runOCRFromVideo() {
 
   let best = null;
   const reads = [];
+  const thresholds = { A: cvA, B: cvB };
   for (const [label, cv] of [['A', cvA], ['B', cvB]]) {
     const { data } = await state.tesseractWorker.recognize(cv);
     const text = (data.text || '').trim().replace(/\n+/g, ' ');
@@ -259,10 +268,10 @@ async function runOCRFromVideo() {
     if (m && (!best || m.score > best.score)) best = m;
   }
 
-  // Debug preview: the raw color name-band crop before thresholding — lets the
-  // user see exactly what region was handed to OCR so framing issues are obvious.
   const debug = {
     nameBandDataUrl: state.nameBandCanvas.toDataURL('image/png'),
+    thresholdADataUrl: thresholds.A.toDataURL('image/png'),
+    thresholdBDataUrl: thresholds.B.toDataURL('image/png'),
     nameBandDims: `${state.nameBandCanvas.width}×${state.nameBandCanvas.height}`,
     videoDims: `${video.videoWidth}×${video.videoHeight}`,
     sourceCrop: `x=${Math.round(nameX)} y=${Math.round(nameY)} w=${Math.round(nameW)} h=${Math.round(nameH)}`,
@@ -303,13 +312,20 @@ function showConfirmError(msg) {
 
 function renderDebugImage() {
   const wrap = document.getElementById('confirm-debug');
-  const img = document.getElementById('confirm-debug-img');
-  if (state.lastDebugImage) {
-    img.src = state.lastDebugImage;
-    wrap.style.display = 'block';
-  } else {
+  if (!state.lastDebugImages) {
     wrap.style.display = 'none';
+    return;
   }
+  document.getElementById('confirm-debug-img').src = state.lastDebugImages.raw;
+  document.getElementById('confirm-debug-a').src = state.lastDebugImages.thresholdA;
+  document.getElementById('confirm-debug-b').src = state.lastDebugImages.thresholdB;
+
+  const reads = state.lastDebugImages.reads || [];
+  document.getElementById('confirm-debug-read-a').textContent =
+    `A: "${reads.find(r => r.label === 'A')?.text || ''}"`;
+  document.getElementById('confirm-debug-read-b').textContent =
+    `B: "${reads.find(r => r.label === 'B')?.text || ''}"`;
+  wrap.style.display = 'block';
 }
 
 async function onConfirmYes() {
