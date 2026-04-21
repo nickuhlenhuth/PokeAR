@@ -25,7 +25,7 @@ function init() {
     return;
   }
 
-  state.clientId = generateClientId();
+  state.clientId = getOrCreateClientId(state.roomId);
   state.client = createSupabaseClient();
 
   state.channel = state.client.channel(`room:${state.roomId}`, {
@@ -52,6 +52,23 @@ function handleAssignBroadcast({ payload }) {
   } else {
     setStatus('assigned', `You are Player ${payload.player}`, 'Capture UI lands in phase 4.');
     console.log(`[capture] assigned to Player ${payload.player}`);
+  }
+}
+
+// Persist a stable clientId per room so backgrounding / reconnecting keeps the
+// same identity — otherwise the iPad treats every reconnect as a brand-new
+// player and reassigns slots.
+function getOrCreateClientId(roomId) {
+  const key = `pokebattle.clientId.${roomId}`;
+  try {
+    let id = localStorage.getItem(key);
+    if (!id) {
+      id = generateClientId();
+      localStorage.setItem(key, id);
+    }
+    return id;
+  } catch {
+    return generateClientId();
   }
 }
 

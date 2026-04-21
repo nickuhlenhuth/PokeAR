@@ -27,7 +27,6 @@ function init() {
 
   state.channel
     .on('presence', { event: 'sync' }, handlePresenceSync)
-    .on('presence', { event: 'leave' }, handlePresenceLeave)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'battlefield' });
@@ -60,16 +59,21 @@ function handlePresenceSync() {
   for (const [clientId, metas] of Object.entries(presences)) {
     const meta = metas[0];
     if (!meta || meta.role !== 'player') continue;
-    if (state.processed.has(clientId)) continue;
 
-    let slot;
-    if (state.slots[1] === null) slot = 1;
-    else if (state.slots[2] === null) slot = 2;
-    else slot = null;
+    let slot = slotForClient(clientId);
 
-    if (slot !== null) state.slots[slot] = clientId;
-    state.processed.add(clientId);
+    if (slot === undefined) {
+      // New client — assign to the next open slot (or null if full).
+      if (state.slots[1] === null) slot = 1;
+      else if (state.slots[2] === null) slot = 2;
+      else slot = null;
 
+      if (slot !== null) state.slots[slot] = clientId;
+      state.processed.add(clientId);
+      console.log(`[battlefield] new client ${clientId} → Player ${slot}`);
+    }
+
+    // Re-broadcast on every sync so reconnecting phones catch back up to their slot.
     sendAssignment(clientId, slot);
   }
 
@@ -77,16 +81,11 @@ function handlePresenceSync() {
   updateQRVisibility();
 }
 
-function handlePresenceLeave({ key }) {
-  for (const slotNum of [1, 2]) {
-    if (state.slots[slotNum] === key) {
-      state.slots[slotNum] = null;
-      state.processed.delete(key);
-      console.log(`[battlefield] Player ${slotNum} left (${key})`);
-    }
-  }
-  updateSlotStatuses();
-  updateQRVisibility();
+function slotForClient(clientId) {
+  if (state.slots[1] === clientId) return 1;
+  if (state.slots[2] === clientId) return 2;
+  if (state.processed.has(clientId)) return null; // previously rejected
+  return undefined; // never seen
 }
 
 async function sendAssignment(clientId, slot) {
