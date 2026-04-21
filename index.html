@@ -20,28 +20,55 @@
       background-color: #000;
     }
 
-    /* Sprite slots — absolute-positioned <img> elements over the battle platform.
-       Hidden until a src is set (by demo mode in phase 3, by capture broadcasts in phase 4). */
-    .sprite {
+    /* Slot wrappers — one per player. Each contains the Pokemon sprite img,
+       the pokeball (for entrance animation), and a flash overlay. */
+    .slot {
       position: absolute;
       bottom: 22%;
+      width: 28vh;
       height: 28vh;
-      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    /* Showdown gen-5 front sprites face viewer's left. Flip the LEFT slot so
+       the two Pokemon face each other. The flip is on the wrapper, so pokeball
+       and flash ride along — pokeball is symmetric so the flip is invisible. */
+    #slot1 { left: 30%; transform: translateX(-50%) scaleX(-1); }
+    #slot2 { left: 70%; transform: translateX(-50%); }
+
+    .slot-sprite, .slot-pokeball {
+      position: absolute;
+      left: 0; right: 0; top: 0; bottom: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
       image-rendering: pixelated;
       image-rendering: -moz-crisp-edges;
       image-rendering: crisp-edges;
       filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.55));
-      object-fit: contain;
-      display: none;
-      pointer-events: none;
       user-select: none;
     }
-    .sprite[src] { display: block; }
-    /* Showdown gen-5 front sprites face viewer's left by convention. To make the
-       two sprites face each other on the battlefield, flip the LEFT slot (so it
-       faces right toward center) and leave the RIGHT slot natural. */
-    #slot1-sprite { left: 30%; transform: translateX(-50%) scaleX(-1); }
-    #slot2-sprite { left: 70%; }
+    .slot-sprite { display: none; }
+    .slot-sprite[src] { display: block; }
+    .slot-sprite.idle { animation: idle-bob 1.6s ease-in-out infinite; }
+    @keyframes idle-bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-6px); }
+    }
+
+    .slot-pokeball {
+      display: none;
+      width: 45%; height: 45%;
+      left: 27.5%; top: 30%;
+    }
+    .slot-pokeball.active { display: block; }
+
+    .slot-flash {
+      position: absolute;
+      left: -30%; right: -30%; top: -30%; bottom: -30%;
+      background: radial-gradient(circle at center, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.6) 25%, rgba(255,255,255,0) 60%);
+      opacity: 0;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
 
     .slot-status {
       position: absolute;
@@ -165,8 +192,16 @@
 <body>
 
 <div id="battlefield">
-  <img id="slot1-sprite" class="sprite" alt="" />
-  <img id="slot2-sprite" class="sprite" alt="" />
+  <div id="slot1" class="slot">
+    <img class="slot-sprite" alt="" />
+    <img class="slot-pokeball" alt="" />
+    <div class="slot-flash"></div>
+  </div>
+  <div id="slot2" class="slot">
+    <img class="slot-sprite" alt="" />
+    <img class="slot-pokeball" alt="" />
+    <div class="slot-flash"></div>
+  </div>
 </div>
 
 <div id="slot1-status" class="slot-status">Waiting for Player 1…</div>
