@@ -9,29 +9,45 @@
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #111; color: white;
+      background: #0e0e12; color: white;
+      -webkit-tap-highlight-color: transparent;
     }
 
-    main {
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: 100%; padding: 24px; text-align: center;
+    main { display: flex; flex-direction: column; height: 100%; }
+
+    .stage { display: none; flex: 1; flex-direction: column; }
+    .stage.active { display: flex; }
+
+    /* ---------- Shared header ---------- */
+    header.topbar {
+      padding: 14px 18px 10px; display: flex; justify-content: space-between; align-items: center;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.55), rgba(0,0,0,0));
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+    }
+    header.topbar .badge {
+      background: rgba(20, 150, 60, 0.85);
+      color: white; font-weight: 700; font-size: 13px;
+      padding: 4px 10px; border-radius: 999px;
+      border: 1px solid rgba(120, 255, 150, 0.4);
+    }
+    header.topbar .room {
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #ccc;
+      letter-spacing: 1px;
     }
 
-    #title { font-size: 22px; margin: 0 0 8px; font-weight: 700; }
+    /* ---------- status-stage (pre-camera) ---------- */
+    #status-stage { align-items: center; justify-content: center; padding: 24px; text-align: center; }
+    #title { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
     #room-label { font-size: 12px; color: #888; margin-bottom: 24px; letter-spacing: 1px; }
     #room-label code {
       font-family: ui-monospace, Menlo, monospace;
       background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px;
       font-size: 14px; letter-spacing: 2px; color: #fff;
     }
-
     #status-card {
-      background: #1e1e28;
-      border: 1px solid #333;
-      border-radius: 14px;
-      padding: 24px 28px;
-      min-width: 260px;
-      max-width: 360px;
+      background: #1e1e28; border: 1px solid #333;
+      border-radius: 14px; padding: 24px 28px;
+      min-width: 260px; max-width: 360px;
       transition: background 0.2s, border-color 0.2s;
     }
     #status-card.assigned {
@@ -42,13 +58,8 @@
       background: rgba(140, 30, 30, 0.25);
       border-color: rgba(255, 120, 120, 0.5);
     }
-    #status-headline {
-      font-size: 18px; font-weight: 700; margin-bottom: 6px;
-    }
-    #status-detail {
-      font-size: 13px; color: #bbb; line-height: 1.5;
-    }
-
+    #status-headline { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+    #status-detail { font-size: 13px; color: #bbb; line-height: 1.5; }
     .spinner {
       width: 18px; height: 18px; border-radius: 50%;
       border: 2px solid rgba(255,255,255,0.2);
@@ -58,21 +69,144 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    #start-camera-btn {
+      margin-top: 20px;
+      padding: 14px 32px; font-size: 16px; font-weight: 700;
+      border: none; border-radius: 12px;
+      background: #ffcb05; color: #1a1a1a;
+      cursor: pointer;
+    }
+
+    /* ---------- camera-stage ---------- */
+    #camera-stage { position: relative; }
+    #video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; background: #000;
+    }
+
+    /* Card-alignment guide — Pokemon TCG cards are 2.5:3.5 = ~0.714 aspect */
+    #card-guide {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 75vw; aspect-ratio: 0.714;
+      max-height: 62vh;
+      pointer-events: none;
+      border: 2px solid rgba(255, 203, 5, 0.8);
+      border-radius: 12px;
+      box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.35);
+    }
+    #card-guide .name-band {
+      position: absolute; left: 3%; top: 3%;
+      width: 94%; height: 14%;
+      border: 1.5px dashed rgba(100, 200, 255, 0.75);
+      border-radius: 4px;
+    }
+    #card-guide .name-band::before {
+      content: "name";
+      position: absolute; top: -16px; left: 2px;
+      font-size: 10px; color: rgba(100, 200, 255, 0.85);
+    }
+
+    #camera-msg {
+      position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.75); color: white;
+      padding: 10px 18px; border-radius: 999px;
+      font-size: 13px; backdrop-filter: blur(6px);
+      white-space: nowrap;
+    }
+
+    #camera-actions {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: 18px 20px 28px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0));
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+      z-index: 10;
+    }
+    .primary-btn {
+      width: 100%; max-width: 280px;
+      padding: 16px 0; font-size: 17px; font-weight: 700;
+      border: none; border-radius: 14px;
+      background: #ffcb05; color: #1a1a1a;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+    .primary-btn:disabled { opacity: 0.55; }
+    .text-btn {
+      background: none; border: none; color: #ddd;
+      font-size: 13px; text-decoration: underline;
+      cursor: pointer; padding: 4px 8px;
+    }
+
+    #last-sent-banner {
+      display: none;
+      position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+      background: rgba(20, 150, 60, 0.85); color: white;
+      padding: 6px 14px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+      border: 1px solid rgba(120, 255, 150, 0.4);
+      z-index: 10;
+    }
+    #last-sent-banner.show { display: block; animation: fadeIn 0.25s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+    /* ---------- confirm-stage ---------- */
+    #confirm-stage { align-items: center; justify-content: center; padding: 24px; text-align: center; }
+    #confirm-headline { font-size: 14px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1.5px; }
+    #confirm-name { font-size: 34px; font-weight: 800; margin-bottom: 18px; text-transform: capitalize; }
+    #confirm-preview {
+      width: 160px; height: 160px; object-fit: contain;
+      image-rendering: pixelated;
+      margin-bottom: 24px;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+    }
+    #confirm-actions { display: flex; gap: 12px; width: 100%; max-width: 320px; margin-bottom: 16px; }
+    #confirm-actions button { flex: 1; padding: 14px 0; font-size: 15px; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; }
+    #confirm-yes { background: #14a048; color: white; }
+    #confirm-no { background: #333; color: white; }
+
+    #confirm-error {
+      color: #ff9090; font-size: 14px; margin-bottom: 18px;
+      max-width: 320px; line-height: 1.4;
+    }
+
+    /* ---------- typing-stage ---------- */
+    #typing-stage { align-items: stretch; justify-content: center; padding: 80px 24px 24px; text-align: center; }
+    #typing-stage .headline { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+    #typing-stage .sub { font-size: 13px; color: #999; margin-bottom: 24px; }
+    #type-input {
+      width: 100%; padding: 16px; font-size: 18px;
+      background: #1e1e28; color: white; border: 1.5px solid #333;
+      border-radius: 12px; outline: none;
+      text-align: center;
+    }
+    #type-input:focus { border-color: #ffcb05; }
+    #type-preview {
+      min-height: 60px; margin: 16px 0 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #bbb;
+    }
+    #type-preview img {
+      width: 72px; height: 72px; object-fit: contain;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+    }
+    #typing-actions { display: flex; gap: 12px; margin-top: 12px; }
+    #typing-actions button { flex: 1; padding: 14px 0; font-size: 15px; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; }
+    #typing-send { background: #ffcb05; color: #1a1a1a; }
+    #typing-send:disabled { opacity: 0.5; }
+    #typing-back { background: #2a2a35; color: white; }
+
+    /* ---------- setup-overlay ---------- */
     #setup-overlay {
       position: fixed; inset: 0; z-index: 100;
       background: rgba(10, 10, 15, 0.96);
-      display: none;
-      align-items: center; justify-content: center;
+      display: none; align-items: center; justify-content: center;
       padding: 24px;
     }
     #setup-overlay.active { display: flex; }
     #setup-overlay .box {
-      max-width: 520px;
-      background: #1a1a22;
-      border: 1px solid #333;
-      border-radius: 14px;
-      padding: 28px;
-      line-height: 1.55;
+      max-width: 520px; background: #1a1a22; border: 1px solid #333;
+      border-radius: 14px; padding: 28px; line-height: 1.55;
     }
     #setup-overlay h2 { margin: 0 0 12px; font-size: 20px; }
     #setup-overlay p { font-size: 14px; color: #ccc; }
@@ -85,23 +219,71 @@
 <body>
 
 <main>
-  <div id="title">PokeBattle</div>
-  <div id="room-label">Room: <code id="room-code-value">—</code></div>
-  <div id="status-card">
-    <div id="status-headline"><span class="spinner"></span>Connecting…</div>
-    <div id="status-detail">Joining the battle room.</div>
-  </div>
+
+  <!-- Pre-camera: connecting, waiting, assigned, full, error -->
+  <section id="status-stage" class="stage active">
+    <div id="title">PokeBattle</div>
+    <div id="room-label">Room: <code id="room-code-value">—</code></div>
+    <div id="status-card">
+      <div id="status-headline"><span class="spinner"></span>Connecting…</div>
+      <div id="status-detail">Joining the battle room.</div>
+      <button id="start-camera-btn" style="display:none;">Start camera</button>
+    </div>
+  </section>
+
+  <!-- Camera: live preview + capture button -->
+  <section id="camera-stage" class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <header class="topbar">
+      <div class="badge" id="player-badge">Player ?</div>
+      <div class="room">Room: <span id="room-small">—</span></div>
+    </header>
+    <div id="last-sent-banner"></div>
+    <div id="card-guide"><div class="name-band"></div></div>
+    <div id="camera-msg" style="display:none;"></div>
+    <div id="camera-actions">
+      <button id="capture-btn" class="primary-btn">Capture</button>
+      <button id="type-btn" class="text-btn">Type name instead</button>
+    </div>
+  </section>
+
+  <!-- Confirm: show OCR result + yes/no -->
+  <section id="confirm-stage" class="stage">
+    <div id="confirm-headline">Detected</div>
+    <div id="confirm-name">—</div>
+    <img id="confirm-preview" alt="" />
+    <div id="confirm-actions">
+      <button id="confirm-no">Try again</button>
+      <button id="confirm-yes">Send</button>
+    </div>
+    <button id="confirm-type" class="text-btn">Type name instead</button>
+    <div id="confirm-error" style="display:none;"></div>
+  </section>
+
+  <!-- Typing fallback -->
+  <section id="typing-stage" class="stage">
+    <div class="headline">Type Pokemon name</div>
+    <div class="sub">Use the suggestions as you type.</div>
+    <input id="type-input" type="text" list="pokemon-names" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. pikachu" />
+    <datalist id="pokemon-names"></datalist>
+    <div id="type-preview">Start typing…</div>
+    <div id="typing-actions">
+      <button id="typing-back">Back</button>
+      <button id="typing-send" disabled>Send</button>
+    </div>
+  </section>
+
 </main>
 
 <div id="setup-overlay">
   <div class="box">
     <h2>Supabase not configured</h2>
     <p>Open <code>shared.js</code>, paste your Supabase <code>URL</code> and <code>anon key</code>, and reload.</p>
-    <p style="margin-top:10px;color:#888;font-size:12px;">Setup instructions are on the battlefield page.</p>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="shared.js"></script>
 <script src="capture.js"></script>
 

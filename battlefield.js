@@ -10,6 +10,8 @@ const state = {
 };
 
 function init() {
+  if (isDemoMode()) loadDemoSprites();
+
   if (!supabaseConfigured()) {
     document.getElementById('setup-overlay').classList.add('active');
     return;
@@ -27,12 +29,34 @@ function init() {
 
   state.channel
     .on('presence', { event: 'sync' }, handlePresenceSync)
+    .on('broadcast', { event: 'capture' }, handleCaptureBroadcast)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'battlefield' });
         console.log(`[battlefield] subscribed to room:${state.roomId}`);
       }
     });
+}
+
+async function handleCaptureBroadcast({ payload }) {
+  const { player, pokemon } = payload || {};
+  if (player !== 1 && player !== 2) return;
+  if (!pokemon) return;
+
+  console.log(`[battlefield] capture received: Player ${player} → ${pokemon}`);
+  const url = await getSpriteFor(pokemon);
+  const img = document.getElementById(`slot${player}-sprite`);
+  if (url) {
+    img.src = url;
+  }
+
+  const statusEl = document.getElementById(`slot${player}-status`);
+  statusEl.textContent = prettifyName(pokemon);
+  statusEl.classList.add('filled');
+}
+
+function prettifyName(name) {
+  return name.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 }
 
 function renderRoomCode(roomId) {
@@ -122,6 +146,24 @@ function updateQRVisibility() {
   const qr = document.getElementById('qr-panel');
   if (state.slots[1] && state.slots[2]) qr.classList.add('hidden');
   else qr.classList.remove('hidden');
+}
+
+// ---------- Phase 3 demo mode ----------
+// Open index.html?demo=1 to hardcode Pikachu (P1) and Charizard (P2) into the
+// slots so sprite positioning against the stadium background can be tuned.
+// Independent of Supabase — does not require credentials.
+
+function isDemoMode() {
+  return new URLSearchParams(window.location.search).get('demo') === '1';
+}
+
+async function loadDemoSprites() {
+  const [p1, p2] = await Promise.all([
+    getSpriteFor('pikachu'),
+    getSpriteFor('charizard'),
+  ]);
+  if (p1) document.getElementById('slot1-sprite').src = p1;
+  if (p2) document.getElementById('slot2-sprite').src = p2;
 }
 
 init();

@@ -20,20 +20,33 @@
       background-color: #000;
     }
 
-    /* Sprite slot placeholders. Sprites land here in later phases. */
-    .slot {
+    /* Sprite slots — absolute-positioned <img> elements over the battle platform.
+       Hidden until a src is set (by demo mode in phase 3, by capture broadcasts in phase 4). */
+    .sprite {
       position: absolute;
       bottom: 22%;
       height: 28vh;
-      width: 1px;
+      transform: translateX(-50%);
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.55));
+      object-fit: contain;
+      display: none;
+      pointer-events: none;
+      user-select: none;
     }
-    #slot1 { left: 30%; }
-    #slot2 { right: 30%; }
+    .sprite[src] { display: block; }
+    /* Showdown gen-5 front sprites face viewer's left by convention. To make the
+       two sprites face each other on the battlefield, flip the LEFT slot (so it
+       faces right toward center) and leave the RIGHT slot natural. */
+    #slot1-sprite { left: 30%; transform: translateX(-50%) scaleX(-1); }
+    #slot2-sprite { left: 70%; }
 
     .slot-status {
       position: absolute;
-      bottom: 50%;
-      transform: translate(-50%, 0);
+      bottom: 52%;
+      transform: translateX(-50%);
       background: rgba(0, 0, 0, 0.65);
       padding: 6px 12px;
       border-radius: 8px;
@@ -42,7 +55,7 @@
       white-space: nowrap;
       color: #ddd;
       border: 1px solid rgba(255, 255, 255, 0.1);
-      transition: background 0.2s, color 0.2s;
+      transition: background 0.2s, color 0.2s, opacity 0.2s;
     }
     #slot1-status { left: 30%; }
     #slot2-status { left: 70%; }
@@ -51,6 +64,38 @@
       color: white;
       border-color: rgba(120, 255, 150, 0.4);
     }
+
+    #rotate-warning {
+      position: fixed; inset: 0; z-index: 200;
+      background: #0a0a0e;
+      display: none;
+      align-items: center; justify-content: center;
+      padding: 24px; text-align: center;
+    }
+    @media (orientation: portrait) {
+      #rotate-warning { display: flex; }
+    }
+    #rotate-warning .icon {
+      width: 64px; height: 44px;
+      border: 3px solid rgba(255, 255, 255, 0.85);
+      border-radius: 6px;
+      margin: 0 auto 16px;
+      position: relative;
+      animation: tilt 1.6s ease-in-out infinite;
+    }
+    #rotate-warning .icon::after {
+      content: "";
+      position: absolute; left: 50%; bottom: -10px;
+      transform: translateX(-50%);
+      width: 14px; height: 3px; background: rgba(255, 255, 255, 0.85);
+      border-radius: 2px;
+    }
+    @keyframes tilt {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-90deg); }
+    }
+    #rotate-warning .msg { font-size: 16px; font-weight: 600; color: #ddd; }
+    #rotate-warning .sub { font-size: 12px; color: #888; margin-top: 6px; }
 
     #qr-panel {
       position: absolute;
@@ -120,12 +165,20 @@
 <body>
 
 <div id="battlefield">
-  <div id="slot1" class="slot"></div>
-  <div id="slot2" class="slot"></div>
+  <img id="slot1-sprite" class="sprite" alt="" />
+  <img id="slot2-sprite" class="sprite" alt="" />
 </div>
 
 <div id="slot1-status" class="slot-status">Waiting for Player 1…</div>
 <div id="slot2-status" class="slot-status">Waiting for Player 2…</div>
+
+<div id="rotate-warning">
+  <div>
+    <div class="icon" aria-hidden="true"></div>
+    <div class="msg">Rotate to landscape</div>
+    <div class="sub">The battlefield is designed for horizontal view.</div>
+  </div>
+</div>
 
 <div id="qr-panel">
   <div class="label">Scan to join</div>
