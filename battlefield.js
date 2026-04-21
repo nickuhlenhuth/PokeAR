@@ -145,7 +145,7 @@ async function clearSlot(player) {
     await fadeOutSprite(spriteEl);
   }
   const statusEl = document.getElementById(`slot${player}-status`);
-  statusEl.textContent = `Waiting for Player ${player}…`;
+  statusEl.textContent = `Waiting for Trainer ${player}…`;
   statusEl.classList.remove('filled');
 }
 
@@ -383,11 +383,11 @@ function updateSlotStatuses() {
   // Don't overwrite a label that already shows a Pokemon name (filled state
   // stays set by updateSlot until the next capture).
   if (!s1.classList.contains('filled') || !state.slots[1]) {
-    s1.textContent = state.slots[1] ? 'Player 1 joined' : 'Waiting for Player 1…';
+    s1.textContent = state.slots[1] ? 'Trainer 1 joined' : 'Waiting for Trainer 1…';
     s1.classList.toggle('filled', !!state.slots[1]);
   }
   if (!s2.classList.contains('filled') || !state.slots[2]) {
-    s2.textContent = state.slots[2] ? 'Player 2 joined' : 'Waiting for Player 2…';
+    s2.textContent = state.slots[2] ? 'Trainer 2 joined' : 'Waiting for Trainer 2…';
     s2.classList.toggle('filled', !!state.slots[2]);
   }
 }

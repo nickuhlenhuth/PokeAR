@@ -93,19 +93,21 @@
     }
 
     /* Bench strips — horizontal rows along the bottom, 5 tiles each.
-       Player 1 fills left-to-right, Player 2 fills right-to-left (via
-       row-reverse), so each player's slot 0 sits at their outer edge. */
+       Trainer 1 fills left-to-right, Trainer 2 fills right-to-left (via
+       row-reverse), so each trainer's slot 0 sits at their outer edge.
+       Trainer name badges sit at the outer screen edge (reserved for a
+       future trainer avatar). */
     .bench-strip {
       position: absolute;
       bottom: 1.5%;
-      height: 14vh;
-      width: 44%;
+      height: 10vh;
+      width: 31%;
       display: flex;
       gap: 6px;
       z-index: 3;
     }
-    #bench1-strip { left: 2%; flex-direction: row; }
-    #bench2-strip { right: 2%; flex-direction: row-reverse; }
+    #bench1-strip { left: 13%; flex-direction: row; }
+    #bench2-strip { right: 13%; flex-direction: row-reverse; }
     .bench-slot {
       flex: 1;
       background: rgba(0, 0, 0, 0.45);
@@ -141,29 +143,35 @@
       font-weight: 600;
     }
 
-    /* Trainer name badge — fades in once a player sets their name. Sits
-       just above the slot-status label so each player's side reads
-       top-to-bottom: trainer → Pokemon status → sprite. */
+    /* Trainer name badge — lives on the outer edge of the trainer's bench
+       strip. Reserved footprint for a future trainer avatar. */
     .slot-trainer {
       position: absolute;
-      bottom: 59%;
-      transform: translateX(-50%);
+      bottom: 1.5%;
+      height: 10vh;
+      width: 10vw;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
       background: rgba(0, 0, 0, 0.55);
-      padding: 5px 14px;
       border-radius: 8px;
-      font-size: 15px;
-      font-weight: 700;
-      color: white;
-      backdrop-filter: blur(8px);
       border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       opacity: 0;
       transition: opacity 0.3s;
       z-index: 5;
     }
     .slot-trainer.visible { opacity: 1; }
-    #slot1-trainer { left: 30%; }
-    #slot2-trainer { left: 70%; }
+    #slot1-trainer { left: 1.5%; }
+    #slot2-trainer { right: 1.5%; }
 
     #rotate-warning {
       position: fixed; inset: 0; z-index: 200;
@@ -294,8 +302,8 @@
 
 <div id="slot1-trainer" class="slot-trainer">—</div>
 <div id="slot2-trainer" class="slot-trainer">—</div>
-<div id="slot1-status" class="slot-status">Waiting for Player 1…</div>
-<div id="slot2-status" class="slot-status">Waiting for Player 2…</div>
+<div id="slot1-status" class="slot-status">Waiting for Trainer 1…</div>
+<div id="slot2-status" class="slot-status">Waiting for Trainer 2…</div>
 
 <div id="rotate-warning">
   <div>

@@ -119,9 +119,9 @@ function handleAssignBroadcast({ payload }) {
   }
 
   document.getElementById('trainer-player-number').textContent = payload.player;
-  document.getElementById('dashboard-player-tag').textContent = `Player ${payload.player}`;
-  document.getElementById('player-badge').textContent = `Player ${payload.player}`;
-  console.log(`[capture] assigned to Player ${payload.player}`);
+  document.getElementById('dashboard-player-tag').textContent = `Trainer ${payload.player}`;
+  document.getElementById('player-badge').textContent = `Trainer ${payload.player}`;
+  console.log(`[capture] assigned to Trainer ${payload.player}`);
 
   // Fast-path: if this room has a remembered player state, skip the trainer
   // stage and go straight to the dashboard (restores full lineup on reload).
@@ -601,7 +601,12 @@ async function renderDashboardActive() {
   if (!state.playerState.active) {
     tile.classList.add('active-empty');
     tile.classList.remove('active-filled');
-    tile.innerHTML = '<div class="active-placeholder">No active Pokemon yet. Tap a bench Pokemon to promote, or "Capture Pokemon" below.</div>';
+    tile.innerHTML = `
+      <div>
+        <div class="active-placeholder">No Active Pokemon</div>
+        <div class="active-plus">+</div>
+      </div>
+    `;
     return;
   }
   const name = state.playerState.active.name;

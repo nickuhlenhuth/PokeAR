@@ -143,7 +143,7 @@
     }
     #active-tile .active-plus {
       font-size: 38px; color: #444; line-height: 1;
-      margin-bottom: 6px;
+      margin-top: 10px;
     }
     #active-tile .active-placeholder {
       color: #666; font-size: 12px; line-height: 1.4;
@@ -414,7 +414,7 @@
   <!-- Trainer name entry (post-assignment, pre-dashboard) -->
   <section id="trainer-stage" class="stage">
     <div class="room-hint">Room <code id="trainer-room-code">—</code></div>
-    <div class="you-are">You are Player <span id="trainer-player-number">?</span></div>
+    <div class="you-are">You are Trainer <span id="trainer-player-number">?</span></div>
     <div class="prompt">Pick your trainer name</div>
     <input id="trainer-name-input" type="text" maxlength="20" placeholder="e.g. Ash" autocomplete="off" autocapitalize="words" />
     <button id="trainer-submit" class="primary-btn" disabled>Enter Battle</button>
@@ -424,7 +424,7 @@
   <section id="dashboard-stage" class="stage">
     <header class="dashboard-header">
       <div class="trainer">
-        <span class="you-tag" id="dashboard-player-tag">Player 1</span>
+        <span class="you-tag" id="dashboard-player-tag">Trainer 1</span>
         <span class="trainer-name" id="dashboard-trainer-name">—</span>
       </div>
       <button id="dashboard-edit-name" class="text-btn">edit</button>
@@ -434,8 +434,8 @@
       <div class="section-label">Active</div>
       <div id="active-tile" class="active-empty">
         <div>
+          <div class="active-placeholder">No Active Pokemon</div>
           <div class="active-plus">+</div>
-          <div class="active-placeholder">Tap to add active</div>
         </div>
       </div>
 
@@ -458,7 +458,7 @@
     <header class="topbar">
       <div class="topbar-left">
         <button id="camera-back" class="icon-btn" aria-label="Back to dashboard">←</button>
-        <div class="badge" id="player-badge">Player ?</div>
+        <div class="badge" id="player-badge">Trainer ?</div>
       </div>
       <div class="room" id="camera-destination-label">Active</div>
     </header>
