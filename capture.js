@@ -174,7 +174,8 @@ async function onCapture() {
     const result = await runOCRFromVideo();
     hideCameraMsg();
 
-    console.log('[capture] OCR reads:', result.reads);
+    console.log('[capture] OCR reads:', result.reads, 'debug:', result.debug);
+    state.lastDebugImage = result.debug?.nameBandDataUrl || null;
 
     if (!result.match) {
       const readSamples = result.reads.map(r => r.text).filter(Boolean);
@@ -257,7 +258,17 @@ async function runOCRFromVideo() {
     const m = findBestMatchInText(text);
     if (m && (!best || m.score > best.score)) best = m;
   }
-  return { match: best, reads };
+
+  // Debug preview: the raw color name-band crop before thresholding — lets the
+  // user see exactly what region was handed to OCR so framing issues are obvious.
+  const debug = {
+    nameBandDataUrl: state.nameBandCanvas.toDataURL('image/png'),
+    nameBandDims: `${state.nameBandCanvas.width}×${state.nameBandCanvas.height}`,
+    videoDims: `${video.videoWidth}×${video.videoHeight}`,
+    sourceCrop: `x=${Math.round(nameX)} y=${Math.round(nameY)} w=${Math.round(nameW)} h=${Math.round(nameH)}`,
+  };
+
+  return { match: best, reads, debug };
 }
 
 // ---------- Confirm stage ----------
@@ -274,6 +285,7 @@ function showConfirm(name, spriteUrl) {
     img.removeAttribute('src');
     img.style.display = 'none';
   }
+  renderDebugImage();
   showStage('confirm');
 }
 
@@ -285,7 +297,19 @@ function showConfirmError(msg) {
   const err = document.getElementById('confirm-error');
   err.textContent = msg;
   err.style.display = 'block';
+  renderDebugImage();
   showStage('confirm');
+}
+
+function renderDebugImage() {
+  const wrap = document.getElementById('confirm-debug');
+  const img = document.getElementById('confirm-debug-img');
+  if (state.lastDebugImage) {
+    img.src = state.lastDebugImage;
+    wrap.style.display = 'block';
+  } else {
+    wrap.style.display = 'none';
+  }
 }
 
 async function onConfirmYes() {
