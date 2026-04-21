@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Pokémon Card AR</title>
+  <title>Pokémon Card AR v10</title>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
@@ -14,20 +14,17 @@
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       background: #000; color: white;
     }
-
     #stage { position: fixed; inset: 0; overflow: hidden; }
-    #video, #overlay {
-      position: absolute; inset: 0; width: 100%; height: 100%;
-    }
+    #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
     #video { object-fit: cover; background: #000; }
     #overlay { pointer-events: none; }
 
     #debugPanel {
       position: fixed; bottom: 12px; right: 12px; z-index: 30;
-      width: 180px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      width: 200px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
       background: rgba(0,0,0,0.65); display: none;
     }
-    #debugPanel canvas { display: block; width: 100%; }
+    #debugPanel canvas { display: block; width: 100%; margin-bottom: 2px; }
     #debugPanel .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
 
     #startGate {
@@ -51,9 +48,9 @@
     #detected {
       position: fixed; bottom: 12px; left: 12px; z-index: 20;
       background: rgba(0,0,0,0.65); padding: 8px 12px; border-radius: 10px;
-      font-size: 11px; backdrop-filter: blur(8px);
+      font-size: 10px; backdrop-filter: blur(8px);
       font-family: ui-monospace, Menlo, monospace;
-      max-width: calc(100% - 210px);
+      max-width: calc(100% - 230px);
     }
   </style>
 </head>
@@ -61,7 +58,7 @@
 
 <div id="startGate">
   <h1>🔮 Pokémon Card AR</h1>
-  <p>Align your card inside the dashed frame, hold steady, and watch it come alive.</p>
+  <p>Align your card inside the frame. Hold steady.</p>
   <button id="startBtn">Start Camera</button>
 </div>
 
@@ -71,8 +68,12 @@
 </div>
 
 <div id="debugPanel">
-  <div class="lbl">Name region OCR:</div>
-  <canvas id="debugCanvas"></canvas>
+  <div class="lbl">Variant A (adaptive):</div>
+  <canvas id="debugA"></canvas>
+  <div class="lbl">Variant B (adaptive inv):</div>
+  <canvas id="debugB"></canvas>
+  <div class="lbl">Variant C (otsu):</div>
+  <canvas id="debugC"></canvas>
 </div>
 
 <div id="status" style="display:none;">Initializing…</div>
@@ -87,27 +88,26 @@
   const statusEl = document.getElementById('status');
   const detectedEl = document.getElementById('detected');
   const debugPanel = document.getElementById('debugPanel');
-  const debugCanvas = document.getElementById('debugCanvas');
-  const debugCtx = debugCanvas.getContext('2d');
+  const debugA = document.getElementById('debugA');
+  const debugB = document.getElementById('debugB');
+  const debugC = document.getElementById('debugC');
 
-  // Hidden working canvases
-  const grabCanvas = document.createElement('canvas');
-  const grabCtx = grabCanvas.getContext('2d', { willReadFrequently: true });
   const nameCanvas = document.createElement('canvas');
   const nameCtx = nameCanvas.getContext('2d');
 
   let worker = null;
-  let current = null;              // { name, img }
+  let current = null;
   let spriteCache = {};
   let pokemonNameSet = null;
+  let pokemonNames = [];  // as array for scanning
   let ocrRunning = false;
   let pulsePhase = 0;
 
-  // --- Load Pokémon list ---
   async function loadPokemonList() {
     const res = await fetch('https://pokeapi.co/api/v2/pokemon?limit=2000');
     const data = await res.json();
-    pokemonNameSet = new Set(data.results.map(p => p.name.toLowerCase()));
+    pokemonNames = data.results.map(p => p.name.toLowerCase());
+    pokemonNameSet = new Set(pokemonNames);
   }
 
   function editDistance(a, b) {
@@ -122,19 +122,49 @@
     return dp[m][n];
   }
 
-  function findBestMatch(raw) {
+  function findBestMatchForToken(raw) {
     if (!pokemonNameSet) return null;
     const cleaned = raw.toLowerCase().replace(/[^a-z]/g, '');
     if (cleaned.length < 4) return null;
-    if (pokemonNameSet.has(cleaned)) return { name: cleaned, dist: 0 };
+    if (pokemonNameSet.has(cleaned)) return { name: cleaned, dist: 0, score: cleaned.length };
     let best = null, bestDist = Infinity;
     const maxDist = Math.max(1, Math.floor(cleaned.length * 0.3));
-    for (const name of pokemonNameSet) {
+    for (const name of pokemonNames) {
       if (Math.abs(name.length - cleaned.length) > maxDist) continue;
       const d = editDistance(cleaned, name);
       if (d < bestDist) { bestDist = d; best = name; if (d === 0) break; }
     }
-    return bestDist <= maxDist ? { name: best, dist: bestDist } : null;
+    if (bestDist > maxDist) return null;
+    // Score = longer names are higher-confidence matches, fewer edits = better
+    const score = best.length - bestDist * 2;
+    return { name: best, dist: bestDist, score };
+  }
+
+  // Search all tokens and sliding substrings of the raw OCR text for any Pokémon name.
+  // This handles cases like "Team Rockets Mewtwo ex" where the name is embedded.
+  function findBestMatchInText(text) {
+    if (!text) return null;
+    // Normalize: split into whitespace-separated tokens, keep only alpha
+    const tokens = text.toLowerCase().split(/\s+/).map(t => t.replace(/[^a-z]/g, '')).filter(t => t.length >= 4);
+    let best = null;
+    // 1) Try each individual token
+    for (const t of tokens) {
+      const m = findBestMatchForToken(t);
+      if (m && (!best || m.score > best.score)) best = m;
+    }
+    // 2) Try pairs of consecutive tokens joined (e.g. "mr mime" → "mrmime")
+    for (let i = 0; i < tokens.length - 1; i++) {
+      const joined = tokens[i] + tokens[i+1];
+      const m = findBestMatchForToken(joined);
+      if (m && (!best || m.score > best.score)) best = m;
+    }
+    // 3) Try the whole cleaned text as a single token (short names sometimes run together)
+    const cleaned = text.toLowerCase().replace(/[^a-z]/g, '');
+    if (cleaned.length >= 4 && cleaned.length <= 20) {
+      const m = findBestMatchForToken(cleaned);
+      if (m && (!best || m.score > best.score)) best = m;
+    }
+    return best;
   }
 
   async function getSpriteFor(name) {
@@ -158,26 +188,13 @@
     });
   }
 
-  // --- Geometry of the target zone ---
-  // A portrait card-shaped box centered on screen, using 0.716 aspect ratio (Pokémon card spec).
-  // We compute this in CSS pixels (on the screen), and separately translate to video coords for cropping.
   function getTargetBox() {
-    const W = overlay.clientWidth;
-    const H = overlay.clientHeight;
-    // Card takes up ~65% of the shorter viewport dimension in height
+    const W = overlay.clientWidth, H = overlay.clientHeight;
     const cardH = Math.min(H * 0.65, W * 0.65 / 0.716);
     const cardW = cardH * 0.716;
-    const cx = W / 2, cy = H / 2;
-    return {
-      x: cx - cardW / 2,
-      y: cy - cardH / 2,
-      w: cardW,
-      h: cardH
-    };
+    return { x: W/2 - cardW/2, y: H/2 - cardH/2, w: cardW, h: cardH };
   }
 
-  // Maps a CSS-pixel rect on the screen to a pixel rect in the raw video frame,
-  // accounting for object-fit: cover.
   function screenRectToVideo(rect) {
     const W = overlay.clientWidth, H = overlay.clientHeight;
     const vAspect = video.videoWidth / video.videoHeight;
@@ -190,27 +207,16 @@
       dispW = W; dispH = dispW / vAspect;
       offX = 0; offY = (H - dispH) / 2;
     }
-    const sx = video.videoWidth / dispW;
-    const sy = video.videoHeight / dispH;
-    return {
-      x: (rect.x - offX) * sx,
-      y: (rect.y - offY) * sy,
-      w: rect.w * sx,
-      h: rect.h * sy
-    };
+    const sx = video.videoWidth / dispW, sy = video.videoHeight / dispH;
+    return { x: (rect.x - offX) * sx, y: (rect.y - offY) * sy, w: rect.w * sx, h: rect.h * sy };
   }
 
-  // --- Start ---
   async function start() {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       });
       video.srcObject = stream;
@@ -221,22 +227,22 @@
       detectedEl.style.display = 'block';
       debugPanel.style.display = 'block';
 
-      statusEl.textContent = 'Loading OCR (first time ~5s)…';
+      statusEl.textContent = 'Loading OCR…';
       await loadPokemonList();
 
       worker = await Tesseract.createWorker('eng');
       await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ',
-        tessedit_pageseg_mode: '7'  // single line
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz \'',
+        tessedit_pageseg_mode: '7'
       });
 
-      statusEl.textContent = 'Align your card with the dashed frame 🎯';
+      statusEl.textContent = 'Align card with the frame 🎯';
       resizeOverlay();
       window.addEventListener('resize', resizeOverlay);
       requestAnimationFrame(renderLoop);
-      setInterval(runOCR, 700);
+      setInterval(runOCR, 800);
     } catch (e) {
-      alert('Failed to start: ' + e.message);
+      alert('Failed: ' + e.message);
       startBtn.disabled = false;
       startBtn.textContent = 'Start Camera';
     }
@@ -249,59 +255,145 @@
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
   }
 
-  // --- Periodic OCR pass on the fixed target zone's name band ---
+  // --- Grayscale a source canvas, returning a Uint8Array and dimensions ---
+  function toGray(srcCanvas) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').drawImage(srcCanvas, 0, 0);
+    const imgData = tmp.getContext('2d').getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const gray = new Uint8Array(w * h);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      gray[j] = Math.round(0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]);
+    }
+    return { gray, w, h };
+  }
+
+  // --- Adaptive threshold using integral image ---
+  // For each pixel, compare its value to the mean of a surrounding window of size `windowSize`.
+  // If pixel is darker than (mean - C), mark as foreground. Otherwise background.
+  // This handles gradients and holo backgrounds much better than global Otsu.
+  function adaptiveThreshold(gray, w, h, windowSize, C, invert) {
+    // Integral image (64-bit via two 32-bit arrays would be safer, but for our sizes a Float64Array works)
+    const integral = new Float64Array((w+1) * (h+1));
+    for (let y = 1; y <= h; y++) {
+      let rowSum = 0;
+      for (let x = 1; x <= w; x++) {
+        rowSum += gray[(y-1)*w + (x-1)];
+        integral[y*(w+1) + x] = integral[(y-1)*(w+1) + x] + rowSum;
+      }
+    }
+    const half = Math.floor(windowSize / 2);
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const y1 = Math.max(0, y - half);
+      const y2 = Math.min(h - 1, y + half);
+      for (let x = 0; x < w; x++) {
+        const x1 = Math.max(0, x - half);
+        const x2 = Math.min(w - 1, x + half);
+        const area = (x2 - x1 + 1) * (y2 - y1 + 1);
+        const sum = integral[(y2+1)*(w+1) + (x2+1)]
+                  - integral[(y1)*(w+1) + (x2+1)]
+                  - integral[(y2+1)*(w+1) + (x1)]
+                  + integral[y1*(w+1) + x1];
+        const mean = sum / area;
+        const isFg = gray[y*w + x] < mean - C;
+        out[y*w + x] = (invert ? !isFg : isFg) ? 0 : 255;
+      }
+    }
+    return out;
+  }
+
+  // Otsu on the already-grayscale buffer
+  function otsuThreshold(gray, w, h, invert) {
+    const hist = new Array(256).fill(0);
+    for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+    const total = gray.length;
+    let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t]; if (wB === 0) continue;
+      const wF = total - wB; if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sum - sumB) / wF;
+      const v = wB * wF * (mB - mF) * (mB - mF);
+      if (v > maxVar) { maxVar = v; threshold = t; }
+    }
+    const out = new Uint8Array(w * h);
+    for (let i = 0; i < gray.length; i++) {
+      const isFg = gray[i] < threshold;
+      out[i] = (invert ? !isFg : isFg) ? 0 : 255;
+    }
+    return out;
+  }
+
+  function writeMaskToCanvas(mask, w, h, outCanvas) {
+    outCanvas.width = w; outCanvas.height = h;
+    const octx = outCanvas.getContext('2d');
+    const imgData = octx.createImageData(w, h);
+    const d = imgData.data;
+    for (let i = 0, j = 0; i < mask.length; i++, j += 4) {
+      d[j] = d[j+1] = d[j+2] = mask[i];
+      d[j+3] = 255;
+    }
+    octx.putImageData(imgData, 0, 0);
+  }
+
   async function runOCR() {
     if (ocrRunning || !worker || !video.videoWidth) return;
     ocrRunning = true;
     try {
-      // Target card in screen coords, then translate to video coords
       const targetScreen = getTargetBox();
       const targetVideo = screenRectToVideo(targetScreen);
-
-      // Clamp to actual video bounds
       const vx = Math.max(0, targetVideo.x);
       const vy = Math.max(0, targetVideo.y);
       const vw = Math.min(video.videoWidth - vx, targetVideo.w);
       const vh = Math.min(video.videoHeight - vy, targetVideo.h);
       if (vw < 50 || vh < 50) { ocrRunning = false; return; }
 
-      // Name band = top ~13% of the card, left ~72% (skip HP area on right)
+      // Name band = top ~14% of card, full width (include HP — it'll just be ignored text)
       const nameX = vx + vw * 0.03;
       const nameY = vy + vh * 0.03;
-      const nameW = vw * 0.72;
-      const nameH = vh * 0.13;
+      const nameW = vw * 0.94;
+      const nameH = vh * 0.14;
 
-      // Grab to working canvas at 3x upscale
+      // Upscale 3x
       const upscale = 3;
       nameCanvas.width = Math.floor(nameW * upscale);
       nameCanvas.height = Math.floor(nameH * upscale);
       nameCtx.imageSmoothingEnabled = true;
       nameCtx.imageSmoothingQuality = 'high';
-      nameCtx.drawImage(video, nameX, nameY, nameW, nameH,
-                       0, 0, nameCanvas.width, nameCanvas.height);
+      nameCtx.drawImage(video, nameX, nameY, nameW, nameH, 0, 0, nameCanvas.width, nameCanvas.height);
 
-      // Produce binarized (Otsu-like) grayscale for OCR
-      const binCanvas = binarize(nameCanvas);
+      // Grayscale
+      const { gray, w, h } = toGray(nameCanvas);
 
-      // Show in debug
-      debugCanvas.width = binCanvas.width;
-      debugCanvas.height = binCanvas.height;
-      debugCtx.drawImage(binCanvas, 0, 0);
+      // Adaptive window size — about 1/4 of the strip's short dimension, odd
+      let win = Math.floor(Math.min(w, h) / 4);
+      if (win % 2 === 0) win++;
+      if (win < 15) win = 15;
 
-      const { data } = await worker.recognize(binCanvas);
-      const rawText = (data.text || '').trim();
-      const words = (data.words || []).filter(w => w.confidence > 30);
+      const maskA = adaptiveThreshold(gray, w, h, win, 10, false);      // dark text on light bg
+      const maskB = adaptiveThreshold(gray, w, h, win, 10, true);       // light text on dark bg
+      const maskC = otsuThreshold(gray, w, h, false);                   // classic global
 
-      // Try whole text + each word
+      writeMaskToCanvas(maskA, w, h, debugA);
+      writeMaskToCanvas(maskB, w, h, debugB);
+      writeMaskToCanvas(maskC, w, h, debugC);
+
+      // OCR all three, pick the best match
       let best = null;
-      const tryMatch = (t, conf) => {
-        const m = findBestMatch(t);
-        if (m && (!best || m.dist < best.match.dist)) {
-          best = { match: m, raw: t, conf };
+      let reads = [];
+      for (const [label, canvas] of [['A', debugA], ['B', debugB], ['C', debugC]]) {
+        const { data } = await worker.recognize(canvas);
+        const text = (data.text || '').trim().replace(/\n+/g, ' ');
+        reads.push(`${label}:${text || '∅'}`);
+        const m = findBestMatchInText(text);
+        if (m && (!best || m.score > best.match.score)) {
+          best = { match: m, raw: text, variant: label };
         }
-      };
-      tryMatch(rawText, data.confidence || 0);
-      for (const w of words) tryMatch(w.text, w.confidence);
+      }
 
       if (best) {
         if (!current || current.name !== best.match.name) {
@@ -309,9 +401,9 @@
           const img = await getSpriteFor(best.match.name);
           current = { name: best.match.name, img };
         }
-        detectedEl.textContent = `${best.match.name} | "${best.raw}" d=${best.match.dist}`;
+        detectedEl.textContent = `${best.match.name} [${best.variant}] d=${best.match.dist} | ${reads.join(' ')}`;
       } else {
-        detectedEl.textContent = `reading: "${rawText}"`;
+        detectedEl.textContent = reads.join(' | ');
       }
     } catch (e) {
       console.error(e);
@@ -320,110 +412,44 @@
     }
   }
 
-  // Simple Otsu threshold implementation on a canvas
-  function binarize(srcCanvas) {
-    const w = srcCanvas.width, h = srcCanvas.height;
-    const tmp = document.createElement('canvas');
-    tmp.width = w; tmp.height = h;
-    const tctx = tmp.getContext('2d', { willReadFrequently: true });
-    tctx.drawImage(srcCanvas, 0, 0);
-    const imgData = tctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-
-    // Grayscale + histogram
-    const hist = new Array(256).fill(0);
-    const gray = new Uint8Array(w * h);
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      const v = Math.round(0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]);
-      gray[j] = v;
-      hist[v]++;
-    }
-
-    // Otsu's method to find optimal threshold
-    const total = w * h;
-    let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 128;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t]; if (wB === 0) continue;
-      wF = total - wB; if (wF === 0) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB, mF = (sum - sumB) / wF;
-      const varBetween = wB * wF * (mB - mF) * (mB - mF);
-      if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
-    }
-
-    // Determine polarity: most card names are dark-ish text outlined in white/yellow,
-    // but Pokémon TCG often has *white text with black outline*. To handle both,
-    // pick whichever polarity produces fewer "on" pixels in the middle band
-    // (text should be the minority). Actually simpler: produce both and let OCR
-    // pick via fuzzy match — but since we only have one output here, use whichever
-    // has roughly 10-40% "on" pixels which is typical for text.
-    let blackCount = 0;
-    for (let j = 0; j < gray.length; j++) if (gray[j] < threshold) blackCount++;
-    const blackFrac = blackCount / gray.length;
-    // If black makes up >50%, invert
-    const invert = blackFrac > 0.5;
-
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      const isDark = gray[j] < threshold;
-      const on = invert ? !isDark : isDark;
-      const val = on ? 0 : 255;
-      d[i] = d[i+1] = d[i+2] = val;
-    }
-    tctx.putImageData(imgData, 0, 0);
-    return tmp;
-  }
-
-  // --- Render loop ---
   function renderLoop() {
     const W = overlay.clientWidth, H = overlay.clientHeight;
     ctx.clearRect(0, 0, W, H);
     if (!video.videoWidth) { requestAnimationFrame(renderLoop); return; }
 
     pulsePhase += 0.05;
-
-    // Draw dashed target card outline
     const target = getTargetBox();
     const isLocked = !!current;
     const outlineColor = isLocked ? 'rgba(102, 255, 153, 0.95)' : 'rgba(255, 203, 5, 0.95)';
     const glow = 0.5 + 0.5 * Math.sin(pulsePhase);
 
     ctx.save();
-    ctx.strokeStyle = outlineColor;
-    ctx.lineWidth = 3;
-    ctx.setLineDash(isLocked ? [] : [12, 8]);
-    // Dim outer area slightly to draw attention inside
-    ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(0, 0, W, target.y);                         // top
-    ctx.fillRect(0, target.y + target.h, W, H - (target.y + target.h)); // bottom
-    ctx.fillRect(0, target.y, target.x, target.h);           // left
-    ctx.fillRect(target.x + target.w, target.y, W - (target.x + target.w), target.h); // right
+    ctx.fillRect(0, 0, W, target.y);
+    ctx.fillRect(0, target.y + target.h, W, H - (target.y + target.h));
+    ctx.fillRect(0, target.y, target.x, target.h);
+    ctx.fillRect(target.x + target.w, target.y, W - (target.x + target.w), target.h);
     ctx.restore();
 
-    // Corner brackets (more visible than a simple rectangle)
     drawCornerBrackets(target, outlineColor, isLocked ? 4 : 3);
 
-    // Name band indicator inside the target
     const nameBand = {
       x: target.x + target.w * 0.03,
       y: target.y + target.h * 0.03,
-      w: target.w * 0.72,
-      h: target.h * 0.13
+      w: target.w * 0.94,
+      h: target.h * 0.14
     };
+    ctx.save();
     ctx.strokeStyle = `rgba(59,130,246, ${0.6 + 0.3 * glow})`;
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(nameBand.x, nameBand.y, nameBand.w, nameBand.h);
     ctx.setLineDash([]);
-
-    // Helper label
     ctx.fillStyle = 'rgba(59,130,246,0.9)';
     ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillText('name', nameBand.x + 2, nameBand.y - 3);
     ctx.restore();
 
-    // Draw sprite above the card
     if (current && current.img) {
       const anchorX = target.x + target.w / 2;
       const anchorY = target.y;
@@ -434,7 +460,6 @@
       let spriteY = anchorY - spriteH - 8;
       if (spriteY < 60) spriteY = anchorY + 8;
 
-      // Soft shadow at card top
       ctx.save();
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.beginPath();
@@ -451,36 +476,16 @@
   }
 
   function drawCornerBrackets(rect, color, lineWidth) {
-    const L = Math.min(rect.w, rect.h) * 0.12;  // bracket length
+    const L = Math.min(rect.w, rect.h) * 0.12;
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.setLineDash([]);
     ctx.lineCap = 'round';
-    // TL
-    ctx.beginPath();
-    ctx.moveTo(rect.x, rect.y + L);
-    ctx.lineTo(rect.x, rect.y);
-    ctx.lineTo(rect.x + L, rect.y);
-    ctx.stroke();
-    // TR
-    ctx.beginPath();
-    ctx.moveTo(rect.x + rect.w - L, rect.y);
-    ctx.lineTo(rect.x + rect.w, rect.y);
-    ctx.lineTo(rect.x + rect.w, rect.y + L);
-    ctx.stroke();
-    // BR
-    ctx.beginPath();
-    ctx.moveTo(rect.x + rect.w, rect.y + rect.h - L);
-    ctx.lineTo(rect.x + rect.w, rect.y + rect.h);
-    ctx.lineTo(rect.x + rect.w - L, rect.y + rect.h);
-    ctx.stroke();
-    // BL
-    ctx.beginPath();
-    ctx.moveTo(rect.x + L, rect.y + rect.h);
-    ctx.lineTo(rect.x, rect.y + rect.h);
-    ctx.lineTo(rect.x, rect.y + rect.h - L);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rect.x, rect.y + L); ctx.lineTo(rect.x, rect.y); ctx.lineTo(rect.x + L, rect.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rect.x + rect.w - L, rect.y); ctx.lineTo(rect.x + rect.w, rect.y); ctx.lineTo(rect.x + rect.w, rect.y + L); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rect.x + rect.w, rect.y + rect.h - L); ctx.lineTo(rect.x + rect.w, rect.y + rect.h); ctx.lineTo(rect.x + rect.w - L, rect.y + rect.h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rect.x + L, rect.y + rect.h); ctx.lineTo(rect.x, rect.y + rect.h); ctx.lineTo(rect.x, rect.y + rect.h - L); ctx.stroke();
     ctx.restore();
   }
 
