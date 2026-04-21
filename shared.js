@@ -133,6 +133,35 @@ function findHPInText(text) {
   return null;
 }
 
+// ---------- Trainer avatars (Pokemon Showdown CDN) ----------
+// Curated subset of Showdown trainer sprites. Hotlinked at runtime — matches
+// the PokeAPI sprite pattern below, no local assets required. To add or
+// reorder picks, edit this list (IDs must match filenames under
+// https://play.pokemonshowdown.com/sprites/trainers/).
+
+const TRAINER_AVATARS = [
+  { id: 'red',     label: 'Red' },
+  { id: 'blue',    label: 'Blue' },
+  { id: 'ethan',   label: 'Ethan' },
+  { id: 'lyra',    label: 'Lyra' },
+  { id: 'brendan', label: 'Brendan' },
+  { id: 'may',     label: 'May' },
+  { id: 'dawn',    label: 'Dawn' },
+  { id: 'lucas',   label: 'Lucas' },
+  { id: 'n',       label: 'N' },
+  { id: 'hilda',   label: 'Hilda' },
+  { id: 'serena',  label: 'Serena' },
+  { id: 'calem',   label: 'Calem' },
+  { id: 'gloria',  label: 'Gloria' },
+  { id: 'victor',  label: 'Victor' },
+  { id: 'cynthia', label: 'Cynthia' },
+  { id: 'lance',   label: 'Lance' },
+];
+
+function trainerAvatarUrl(id) {
+  return `https://play.pokemonshowdown.com/sprites/trainers/${id}.png`;
+}
+
 // ---------- Sprite fetch (PokeAPI) ----------
 
 const spriteCache = {};

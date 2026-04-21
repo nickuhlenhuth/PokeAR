@@ -20,9 +20,11 @@ const state = {
   damageMode: null,             // 'attack' | 'heal' | 'take' while modal is open
   playerState: {                // own-player state (authoritative)
     trainerName: null,
+    avatarId: null,             // Showdown trainer sprite id (see TRAINER_AVATARS)
     active: null,               // { name, hp, maxHp } or null
     bench: [null, null, null, null, null],
   },
+  selectedAvatarId: null,       // transient trainer-stage selection
 };
 
 function init() {
@@ -66,12 +68,11 @@ function init() {
 
 function wireButtons() {
   // Trainer stage
+  populateAvatarGrid();
   const trainerInput = document.getElementById('trainer-name-input');
-  trainerInput.addEventListener('input', (e) => {
-    document.getElementById('trainer-submit').disabled = !e.target.value.trim();
-  });
+  trainerInput.addEventListener('input', updateTrainerSubmitEnabled);
   trainerInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.value.trim()) onTrainerSubmit();
+    if (e.key === 'Enter' && !document.getElementById('trainer-submit').disabled) onTrainerSubmit();
   });
   document.getElementById('trainer-submit').addEventListener('click', onTrainerSubmit);
 
@@ -147,13 +148,20 @@ function handleAssignBroadcast({ payload }) {
 
   // Fast-path: if this room has a remembered player state, skip the trainer
   // stage and go straight to the dashboard (restores full lineup on reload).
+  // Requires both name AND avatar — legacy saves missing avatarId fall through
+  // to the picker with the name pre-filled.
   const saved = loadPlayerStateFromStorage(state.roomId);
-  if (saved && saved.trainerName) {
+  if (saved && saved.trainerName && saved.avatarId) {
     state.playerState = normalizePlayerState(saved);
     renderDashboardAll();
     broadcastPlayerState();
     showStage('dashboard');
   } else {
+    if (saved?.trainerName) {
+      state.playerState = normalizePlayerState(saved);
+      document.getElementById('trainer-name-input').value = saved.trainerName;
+    }
+    updateTrainerSubmitEnabled();
     showStage('trainer');
     setTimeout(() => document.getElementById('trainer-name-input').focus(), 100);
   }
@@ -161,8 +169,9 @@ function handleAssignBroadcast({ payload }) {
 
 function onTrainerSubmit() {
   const name = document.getElementById('trainer-name-input').value.trim();
-  if (!name) return;
+  if (!name || !state.selectedAvatarId) return;
   state.playerState.trainerName = name;
+  state.playerState.avatarId = state.selectedAvatarId;
   persistAndBroadcast();
   renderDashboardAll();
   showStage('dashboard');
@@ -171,9 +180,49 @@ function onTrainerSubmit() {
 function onEditName() {
   const input = document.getElementById('trainer-name-input');
   input.value = state.playerState.trainerName || '';
-  document.getElementById('trainer-submit').disabled = !input.value.trim();
+  state.selectedAvatarId = state.playerState.avatarId || null;
+  renderAvatarSelection();
+  updateTrainerSubmitEnabled();
   showStage('trainer');
   setTimeout(() => input.focus(), 100);
+}
+
+// ---------- Avatar grid ----------
+
+function populateAvatarGrid() {
+  const grid = document.getElementById('avatar-grid');
+  grid.innerHTML = '';
+  for (const av of TRAINER_AVATARS) {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'avatar-tile';
+    tile.dataset.avatarId = av.id;
+    tile.setAttribute('aria-label', av.label);
+    const img = document.createElement('img');
+    img.src = trainerAvatarUrl(av.id);
+    img.alt = av.label;
+    tile.appendChild(img);
+    tile.addEventListener('click', () => onAvatarTileTap(av.id));
+    grid.appendChild(tile);
+  }
+}
+
+function onAvatarTileTap(id) {
+  state.selectedAvatarId = id;
+  renderAvatarSelection();
+  updateTrainerSubmitEnabled();
+}
+
+function renderAvatarSelection() {
+  const tiles = document.querySelectorAll('#avatar-grid .avatar-tile');
+  for (const tile of tiles) {
+    tile.classList.toggle('selected', tile.dataset.avatarId === state.selectedAvatarId);
+  }
+}
+
+function updateTrainerSubmitEnabled() {
+  const name = document.getElementById('trainer-name-input').value.trim();
+  document.getElementById('trainer-submit').disabled = !(name && state.selectedAvatarId);
 }
 
 // ---------- Capture entry point: tap any slot ----------
@@ -677,6 +726,14 @@ function renderDashboardAll() {
 function renderDashboardTrainer() {
   document.getElementById('dashboard-trainer-name').textContent =
     state.playerState.trainerName || '—';
+  const avatar = document.getElementById('dashboard-trainer-avatar');
+  if (state.playerState.avatarId) {
+    avatar.src = trainerAvatarUrl(state.playerState.avatarId);
+    avatar.classList.add('visible');
+  } else {
+    avatar.removeAttribute('src');
+    avatar.classList.remove('visible');
+  }
 }
 
 async function renderDashboardActive() {
@@ -957,6 +1014,7 @@ function loadPlayerStateFromStorage(roomId) {
 function normalizePlayerState(raw) {
   return {
     trainerName: raw?.trainerName || null,
+    avatarId: raw?.avatarId || null,
     active: raw?.active || null,
     bench: Array.isArray(raw?.bench) && raw.bench.length === 5
       ? raw.bench

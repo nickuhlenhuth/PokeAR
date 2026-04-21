@@ -66,6 +66,11 @@ function handlePlayerStateBroadcast({ payload }) {
     renderTrainerName(player, newState.trainerName);
   }
 
+  // Trainer avatar changed (or first set)
+  if (!prev || prev.avatarId !== newState.avatarId) {
+    renderTrainerAvatar(player, newState.avatarId);
+  }
+
   // Active Pokemon changed (or first set)
   const prevName = prev?.active?.name || null;
   const newName = newState.active?.name || null;
@@ -120,6 +125,19 @@ function renderTrainerName(player, name) {
     el.classList.add('visible');
   } else {
     el.classList.remove('visible');
+  }
+}
+
+function renderTrainerAvatar(player, avatarId) {
+  const wrapper = document.getElementById(`slot${player}-trainer-avatar`);
+  if (!wrapper) return;
+  const img = wrapper.querySelector('img');
+  if (avatarId) {
+    img.src = trainerAvatarUrl(avatarId);
+    wrapper.classList.add('visible');
+  } else {
+    img.removeAttribute('src');
+    wrapper.classList.remove('visible');
   }
 }
 
