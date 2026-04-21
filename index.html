@@ -92,6 +92,54 @@
       border-color: rgba(120, 255, 150, 0.4);
     }
 
+    /* Bench strips — thin vertical columns on each side, 5 tiles each. */
+    .bench-strip {
+      position: absolute;
+      top: 28%;
+      bottom: 28%;
+      width: 9vw;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 3;
+    }
+    #bench1-strip { left: 1.5%; }
+    #bench2-strip { right: 1.5%; }
+    .bench-slot {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 4px;
+      backdrop-filter: blur(4px);
+      overflow: hidden;
+      opacity: 0.35;
+      transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+    }
+    .bench-slot.filled {
+      opacity: 1;
+      background: rgba(20, 20, 30, 0.75);
+      border-color: rgba(255, 255, 255, 0.2);
+      flex-direction: column;
+      gap: 2px;
+    }
+    .bench-slot img {
+      width: 100%;
+      max-height: 70%;
+      object-fit: contain;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+    }
+    .bench-slot .bench-slot-name {
+      font-size: 10px;
+      color: #eee;
+      text-align: center;
+      max-width: 100%;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-weight: 600;
+    }
+
     /* Trainer name badge — fades in once a player sets their name. Sits
        just above the slot-status label so each player's side reads
        top-to-bottom: trainer → Pokemon status → sprite. */
@@ -226,6 +274,21 @@
     <img class="slot-pokeball" alt="" />
     <div class="slot-flash"></div>
   </div>
+</div>
+
+<div id="bench1-strip" class="bench-strip">
+  <div class="bench-slot" data-player="1" data-slot="0"></div>
+  <div class="bench-slot" data-player="1" data-slot="1"></div>
+  <div class="bench-slot" data-player="1" data-slot="2"></div>
+  <div class="bench-slot" data-player="1" data-slot="3"></div>
+  <div class="bench-slot" data-player="1" data-slot="4"></div>
+</div>
+<div id="bench2-strip" class="bench-strip">
+  <div class="bench-slot" data-player="2" data-slot="0"></div>
+  <div class="bench-slot" data-player="2" data-slot="1"></div>
+  <div class="bench-slot" data-player="2" data-slot="2"></div>
+  <div class="bench-slot" data-player="2" data-slot="3"></div>
+  <div class="bench-slot" data-player="2" data-slot="4"></div>
 </div>
 
 <div id="slot1-trainer" class="slot-trainer">—</div>

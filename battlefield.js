@@ -69,6 +69,20 @@ function handlePlayerStateBroadcast({ payload }) {
   const newName = newState.active?.name || null;
   if (newName && prevName !== newName) {
     queueSlotUpdate(player, newName);
+  } else if (!newName && prevName) {
+    // Active cleared (released / retreated to bench) — fade it out.
+    queueSlotClear(player);
+  }
+
+  // Bench may have changed — diff per-slot.
+  const prevBench = prev?.bench || [null, null, null, null, null];
+  const newBench = newState.bench || [null, null, null, null, null];
+  for (let i = 0; i < 5; i++) {
+    const prevName = prevBench[i]?.name || null;
+    const newName = newBench[i]?.name || null;
+    if (prevName !== newName) {
+      renderBenchSlot(player, i, newBench[i]);
+    }
   }
 }
 
@@ -81,6 +95,58 @@ function renderTrainerName(player, name) {
   } else {
     el.classList.remove('visible');
   }
+}
+
+async function renderBenchSlot(player, slot, poke) {
+  const el = document.querySelector(`.bench-slot[data-player="${player}"][data-slot="${slot}"]`);
+  if (!el) return;
+  if (!poke) {
+    el.classList.remove('filled');
+    el.innerHTML = '';
+    return;
+  }
+  const url = await getSpriteFor(poke.name);
+  el.classList.add('filled');
+  el.innerHTML = `
+    <img src="${url || ''}" alt="" />
+    <div class="bench-slot-name">${prettifyName(poke.name)}</div>
+  `;
+}
+
+// When an active Pokemon is retreated to bench or released, fade the sprite
+// out and clear the slot. Uses the existing per-slot animation queue so this
+// sequences correctly with any pending entrance.
+function queueSlotClear(player) {
+  const q = state.slotAnim[player];
+  q.queued = '__clear__';
+  if (q.running) return;
+
+  (async () => {
+    while (q.queued) {
+      const next = q.queued;
+      q.queued = null;
+      q.running = true;
+      try {
+        if (next === '__clear__') await clearSlot(player);
+        else await updateSlot(player, next);
+      } catch (e) {
+        console.error(`[battlefield] slot ${player} clear failed`, e);
+      } finally {
+        q.running = false;
+      }
+    }
+  })();
+}
+
+async function clearSlot(player) {
+  const slotEl = document.getElementById(`slot${player}`);
+  const spriteEl = slotEl.querySelector('.slot-sprite');
+  if (spriteEl.getAttribute('src')) {
+    await fadeOutSprite(spriteEl);
+  }
+  const statusEl = document.getElementById(`slot${player}-status`);
+  statusEl.textContent = `Waiting for Player ${player}…`;
+  statusEl.classList.remove('filled');
 }
 
 function queueSlotUpdate(player, pokemon) {

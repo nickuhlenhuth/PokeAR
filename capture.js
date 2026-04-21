@@ -9,13 +9,14 @@ const state = {
   channel: null,
   client: null,
   player: null,                 // 1 | 2 | null
-  stage: 'status',              // 'status' | 'trainer' | 'dashboard' | 'camera' | 'confirm' | 'typing'
+  stage: 'status',              // 'status' | 'trainer' | 'dashboard' | 'camera' | 'confirm' | 'typing' | 'destination'
   video: null,
   nameBandCanvas: null,
   tesseractWorker: null,
   tesseractReady: false,
   cameraStream: null,
   lastCapture: null,
+  pendingCapture: null,         // { name, spriteUrl } awaiting destination pick
   playerState: {                // own-player state (authoritative)
     trainerName: null,
     active: null,               // { name, hp, maxHp } or null
@@ -77,6 +78,21 @@ function wireButtons() {
   document.getElementById('dashboard-edit-name').addEventListener('click', onEditName);
   document.getElementById('capture-new-btn').addEventListener('click', onCaptureNew);
   document.getElementById('type-new-btn').addEventListener('click', () => showStage('typing'));
+  document.getElementById('active-tile').addEventListener('click', onActiveTileTap);
+  document.querySelectorAll('#bench-row .bench-tile').forEach((tile) => {
+    tile.addEventListener('click', () => onBenchTileTap(Number(tile.dataset.slot)));
+  });
+
+  // Destination picker
+  document.getElementById('destination-active-btn').addEventListener('click', onDestinationActive);
+  document.getElementById('destination-bench-btn').addEventListener('click', onDestinationBench);
+  document.getElementById('destination-cancel').addEventListener('click', onDestinationCancel);
+
+  // Action sheet
+  document.getElementById('action-sheet-cancel').addEventListener('click', hideActionSheet);
+  document.getElementById('action-sheet').addEventListener('click', (e) => {
+    if (e.target.id === 'action-sheet') hideActionSheet();
+  });
 
   // Camera
   document.getElementById('capture-btn').addEventListener('click', onCapture);
@@ -113,12 +129,12 @@ function handleAssignBroadcast({ payload }) {
   document.getElementById('player-badge').textContent = `Player ${payload.player}`;
   console.log(`[capture] assigned to Player ${payload.player}`);
 
-  // Fast-path: if this room has a remembered trainer name, skip the entry
-  // stage and go straight to the dashboard.
-  const savedName = loadTrainerName(state.roomId);
-  if (savedName) {
-    state.playerState.trainerName = savedName;
-    renderDashboardTrainer();
+  // Fast-path: if this room has a remembered player state, skip the trainer
+  // stage and go straight to the dashboard (restores full lineup on reload).
+  const saved = loadPlayerStateFromStorage(state.roomId);
+  if (saved && saved.trainerName) {
+    state.playerState = normalizePlayerState(saved);
+    renderDashboardAll();
     broadcastPlayerState();
     showStage('dashboard');
   } else {
@@ -131,9 +147,8 @@ function onTrainerSubmit() {
   const name = document.getElementById('trainer-name-input').value.trim();
   if (!name) return;
   state.playerState.trainerName = name;
-  saveTrainerName(state.roomId, name);
-  renderDashboardTrainer();
-  broadcastPlayerState();
+  persistAndBroadcast();
+  renderDashboardAll();
   showStage('dashboard');
 }
 
@@ -346,12 +361,11 @@ function showConfirmError(msg) {
   showStage('confirm');
 }
 
-function onConfirmYes() {
+async function onConfirmYes() {
   if (!state.lastCapture?.name) { onConfirmNo(); return; }
-  const name = state.lastCapture.name;
-  setActivePokemon(name);
+  const { name, spriteUrl } = state.lastCapture;
   state.lastCapture = null;
-  showStage('dashboard');
+  await handleNewPokemonCapture(name, spriteUrl);
 }
 
 function onConfirmNo() {
@@ -388,27 +402,166 @@ function onTypeInput(e) {
   }, 180);
 }
 
-function onTypingSend() {
+async function onTypingSend() {
   const name = document.getElementById('type-input').value.toLowerCase().trim();
   if (!name || !pokemonNameSet?.has(name)) return;
-  setActivePokemon(name);
+  const spriteUrl = await getSpriteFor(name);
   document.getElementById('type-input').value = '';
   document.getElementById('type-preview').textContent = 'Start typing…';
   document.getElementById('typing-send').disabled = true;
-  showStage('dashboard');
+  await handleNewPokemonCapture(name, spriteUrl);
 }
 
 function onTypingBack() {
   showStage('dashboard');
 }
 
-// ---------- State + broadcast ----------
+// ---------- New-Pokemon flow: destination picker ----------
 
-function setActivePokemon(name) {
-  // Phase 6: HP fields stay null until Phase 8 adds HP tracking.
-  state.playerState.active = { name, hp: null, maxHp: null };
-  broadcastPlayerState();
+// Called from both confirm (OCR) and typing flows after the user has picked a
+// Pokemon. If active is empty it goes straight there; otherwise the user picks
+// active vs. bench.
+async function handleNewPokemonCapture(name, spriteUrl) {
+  if (!state.playerState.active) {
+    setActive(mkPoke(name));
+    showStage('dashboard');
+    return;
+  }
+  state.pendingCapture = { name, spriteUrl };
+  renderDestination(name, spriteUrl);
+  showStage('destination');
+}
+
+function renderDestination(name, spriteUrl) {
+  document.getElementById('destination-name').textContent = prettifyName(name);
+  const img = document.getElementById('destination-preview');
+  if (spriteUrl) { img.src = spriteUrl; img.style.display = 'block'; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; }
+  const benchFull = firstEmptyBenchSlot() === -1;
+  document.getElementById('destination-bench-btn').disabled = benchFull;
+  document.getElementById('destination-note').style.display = benchFull ? 'block' : 'none';
+}
+
+function onDestinationActive() {
+  if (!state.pendingCapture) { showStage('dashboard'); return; }
+  setActive(mkPoke(state.pendingCapture.name));
+  state.pendingCapture = null;
+  showStage('dashboard');
+}
+
+function onDestinationBench() {
+  if (!state.pendingCapture) { showStage('dashboard'); return; }
+  const slot = firstEmptyBenchSlot();
+  if (slot === -1) return;
+  state.playerState.bench[slot] = mkPoke(state.pendingCapture.name);
+  state.pendingCapture = null;
+  persistAndBroadcast();
+  renderDashboardBench();
+  showStage('dashboard');
+}
+
+function onDestinationCancel() {
+  state.pendingCapture = null;
+  showStage('dashboard');
+}
+
+// ---------- Active / bench tile taps ----------
+
+function onActiveTileTap() {
+  const active = state.playerState.active;
+  if (!active) return; // empty — no actions
+  const spriteUrl = spriteUrlCacheFor(active.name);
+  const benchFull = firstEmptyBenchSlot() === -1;
+  showActionSheet({
+    subtitle: 'Active',
+    name: active.name,
+    spriteUrl,
+    buttons: [
+      {
+        label: benchFull ? 'Retreat to bench (full)' : 'Retreat to bench',
+        disabled: benchFull,
+        onClick: retreatActive,
+      },
+      { label: 'Release', danger: true, onClick: releaseActive },
+    ],
+  });
+}
+
+function onBenchTileTap(slot) {
+  const poke = state.playerState.bench[slot];
+  if (!poke) return;
+  const spriteUrl = spriteUrlCacheFor(poke.name);
+  showActionSheet({
+    subtitle: `Bench slot ${slot + 1}`,
+    name: poke.name,
+    spriteUrl,
+    buttons: [
+      { label: state.playerState.active ? 'Swap to active' : 'Make active',
+        primary: true, onClick: () => promoteBench(slot) },
+      { label: 'Release', danger: true, onClick: () => releaseBench(slot) },
+    ],
+  });
+}
+
+// ---------- State operations ----------
+
+function mkPoke(name) {
+  // HP fields stay null until Phase 8 adds HP tracking.
+  return { name, hp: null, maxHp: null };
+}
+
+function setActive(poke) {
+  state.playerState.active = poke;
+  persistAndBroadcast();
   renderDashboardActive();
+}
+
+function firstEmptyBenchSlot() {
+  return state.playerState.bench.findIndex(p => !p);
+}
+
+function retreatActive() {
+  const active = state.playerState.active;
+  if (!active) return;
+  const slot = firstEmptyBenchSlot();
+  if (slot === -1) return;
+  state.playerState.bench[slot] = active;
+  state.playerState.active = null;
+  persistAndBroadcast();
+  renderDashboardAll();
+  hideActionSheet();
+}
+
+function releaseActive() {
+  state.playerState.active = null;
+  persistAndBroadcast();
+  renderDashboardActive();
+  hideActionSheet();
+}
+
+function promoteBench(slot) {
+  const benchPoke = state.playerState.bench[slot];
+  if (!benchPoke) return;
+  const currentActive = state.playerState.active;
+  state.playerState.active = benchPoke;
+  state.playerState.bench[slot] = currentActive || null;
+  persistAndBroadcast();
+  renderDashboardAll();
+  hideActionSheet();
+}
+
+function releaseBench(slot) {
+  state.playerState.bench[slot] = null;
+  persistAndBroadcast();
+  renderDashboardBench();
+  hideActionSheet();
+}
+
+// ---------- Broadcast + persistence ----------
+
+function persistAndBroadcast() {
+  savePlayerStateToStorage(state.roomId, state.playerState);
+  broadcastPlayerState();
 }
 
 async function broadcastPlayerState() {
@@ -423,6 +576,12 @@ async function broadcastPlayerState() {
 
 // ---------- Dashboard rendering ----------
 
+function renderDashboardAll() {
+  renderDashboardTrainer();
+  renderDashboardActive();
+  renderDashboardBench();
+}
+
 function renderDashboardTrainer() {
   document.getElementById('dashboard-trainer-name').textContent =
     state.playerState.trainerName || '—';
@@ -433,7 +592,7 @@ async function renderDashboardActive() {
   if (!state.playerState.active) {
     tile.classList.add('active-empty');
     tile.classList.remove('active-filled');
-    tile.innerHTML = '<div class="active-placeholder">No active Pokemon yet. Tap "Capture new Pokemon" below to send one in.</div>';
+    tile.innerHTML = '<div class="active-placeholder">No active Pokemon yet. Tap a bench Pokemon to promote, or "Capture Pokemon" below.</div>';
     return;
   }
   const name = state.playerState.active.name;
@@ -444,9 +603,62 @@ async function renderDashboardActive() {
     <img class="active-sprite" src="${url || ''}" alt="" />
     <div>
       <div class="active-name">${prettifyName(name)}</div>
-      <div class="active-note">Active Pokemon</div>
+      <div class="active-note">Tap for actions</div>
     </div>
   `;
+}
+
+async function renderDashboardBench() {
+  const tiles = document.querySelectorAll('#bench-row .bench-tile');
+  for (const tile of tiles) {
+    const slot = Number(tile.dataset.slot);
+    const poke = state.playerState.bench[slot];
+    if (!poke) {
+      tile.classList.remove('filled');
+      tile.innerHTML = '+';
+      continue;
+    }
+    const url = await getSpriteFor(poke.name);
+    tile.classList.add('filled');
+    tile.innerHTML = `
+      <img src="${url || ''}" alt="" />
+      <div class="bench-name">${prettifyName(poke.name)}</div>
+    `;
+  }
+}
+
+// ---------- Action sheet ----------
+
+function showActionSheet({ subtitle, name, spriteUrl, buttons }) {
+  document.getElementById('action-sheet-subtitle').textContent = subtitle;
+  document.getElementById('action-sheet-name').textContent = prettifyName(name);
+  const sprite = document.getElementById('action-sheet-sprite');
+  if (spriteUrl) { sprite.src = spriteUrl; sprite.style.display = 'block'; }
+  else { sprite.removeAttribute('src'); sprite.style.display = 'none'; }
+
+  const container = document.getElementById('action-sheet-buttons');
+  container.innerHTML = '';
+  for (const b of buttons) {
+    const btn = document.createElement('button');
+    btn.className = 'sheet-btn';
+    if (b.primary) btn.classList.add('primary');
+    if (b.danger) btn.classList.add('danger');
+    if (b.disabled) btn.disabled = true;
+    btn.textContent = b.label;
+    btn.addEventListener('click', () => { if (!b.disabled) b.onClick(); });
+    container.appendChild(btn);
+  }
+  document.getElementById('action-sheet').classList.add('visible');
+}
+
+function hideActionSheet() {
+  document.getElementById('action-sheet').classList.remove('visible');
+}
+
+// Cheap cache lookup — spriteCache is populated by getSpriteFor(). Used so the
+// action sheet can show a sprite thumbnail without awaiting a fetch.
+function spriteUrlCacheFor(name) {
+  return (typeof spriteCache !== 'undefined' && spriteCache[name]) || null;
 }
 
 // ---------- UI helpers ----------
@@ -497,17 +709,29 @@ function getOrCreateClientId(roomId) {
   }
 }
 
-function saveTrainerName(roomId, name) {
+function savePlayerStateToStorage(roomId, playerState) {
   try {
-    localStorage.setItem(`pokebattle.trainer.${roomId}`, name);
+    localStorage.setItem(`pokebattle.state.${roomId}`, JSON.stringify(playerState));
   } catch {}
 }
-function loadTrainerName(roomId) {
+function loadPlayerStateFromStorage(roomId) {
   try {
-    return localStorage.getItem(`pokebattle.trainer.${roomId}`);
+    const raw = localStorage.getItem(`pokebattle.state.${roomId}`);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
+}
+
+// Guards against partial saved shapes from earlier versions.
+function normalizePlayerState(raw) {
+  return {
+    trainerName: raw?.trainerName || null,
+    active: raw?.active || null,
+    bench: Array.isArray(raw?.bench) && raw.bench.length === 5
+      ? raw.bench
+      : [null, null, null, null, null],
+  };
 }
 
 function prettifyName(name) {
