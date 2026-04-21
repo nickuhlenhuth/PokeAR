@@ -188,23 +188,24 @@
 
   async function getSpriteFor(name) {
     if (spriteCache[name]) return spriteCache[name];
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => { spriteCache[name] = img; resolve(img); };
-      img.onerror = async () => {
-        try {
-          const r = await fetch(`https://pokeapi.co/api/v2/pokemon/${name}`);
-          const d = await r.json();
-          const fb = new Image();
-          fb.crossOrigin = 'anonymous';
-          fb.onload = () => { spriteCache[name] = fb; resolve(fb); };
-          fb.onerror = () => resolve(null);
-          fb.src = d.sprites.front_default;
-        } catch { resolve(null); }
-      };
-      img.src = `https://play.pokemonshowdown.com/sprites/ani/${name}.gif`;
-    });
+    try {
+      const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${name}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      // Prefer the animated Showdown sprite; fall back to static front_default if unavailable
+      const spriteUrl = data.sprites?.other?.showdown?.front_default
+                     || data.sprites?.front_default;
+      if (!spriteUrl) return null;
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { spriteCache[name] = img; resolve(img); };
+        img.onerror = () => resolve(null);
+        img.src = spriteUrl;
+      });
+    } catch {
+      return null;
+    }
   }
 
   function getTargetBox() {
