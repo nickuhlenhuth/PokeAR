@@ -243,6 +243,22 @@
       font-weight: 700;
       letter-spacing: 2px;
     }
+    #open-capture {
+      display: block;
+      margin: 10px auto 0;
+      padding: 6px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      background: transparent;
+      border: 1px dashed #bbb;
+      border-radius: 4px;
+      text-decoration: none;
+      text-align: center;
+    }
+    #open-capture:hover { color: #333; border-color: #666; }
 
     #setup-overlay {
       position: fixed; inset: 0; z-index: 100;
@@ -317,6 +333,7 @@
   <div class="label">Scan to join</div>
   <div id="qr-code"></div>
   <div id="room-code">------</div>
+  <a id="open-capture" target="_blank" rel="noopener" title="Open capture page in a new tab to join as the second trainer">Open capture ↗</a>
 </div>
 
 <div id="setup-overlay">

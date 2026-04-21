@@ -332,6 +332,8 @@ function renderQRCode(roomId) {
     height: 200,
     correctLevel: QRCode.CorrectLevel.M,
   });
+  const linkEl = document.getElementById('open-capture');
+  if (linkEl) linkEl.href = captureUrl.toString();
   console.log('[battlefield] QR target:', captureUrl.toString());
 }
 
