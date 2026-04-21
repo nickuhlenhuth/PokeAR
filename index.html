@@ -1,31 +1,790 @@
+
+Claude finished the response
+You said: is there something that can take a 2D image and render it in 3d?
+is there something that can take a 2D image and render it in 3d? Basically i want to be able to have a camera look at a pokemon card and render a 3d version standing on the card in AR
+
+12:01 PM
+Claude responded: Yeah, this is an active area and there are a few different approaches depending on how polished you want the result.
+Yeah, this is an active area and there are a few different approaches depending on how polished you want the result. Let me search for what's current.
+
+
+Searched the web
+Searched the web
+Good context on the image-to-3D side. Now let me check the AR-on-card side, which is the other half of what you're asking.
+
+
+Searched the web
+Searched the web
+Good — I have enough. What you're describing is actually two separate problems stitched together, and knowing that helps a lot because each half has mature tools.
+
+Part 1: Generating the 3D model from the card art
+
+AI tools that take a single 2D image and spit out a textured 3D mesh are now pretty good. The main options:
+
+Meshy — probably the most popular; upload a PNG of the Pokémon, get back a rigged .glb/.fbx/.usdz in about a minute. Has a "Multi-view" mode that asks the AI to imagine other angles first, which helps a lot with cards since you only see the front.
+Tripo — similar, free tier is generous, good for testing.
+3D AI Studio, Sloyd, Rodin — other contenders in the same space.
+For Pokémon specifically, you'll get way better results if you (a) cut out just the creature from the card art (remove the border, HP, attacks, etc.) and (b) enable multi-view generation. A single flat illustration is a hard input because the AI has to hallucinate the back of the model entirely.
+
+Part 2: Anchoring the 3D model on the physical card in AR
+
+This is a separate pipeline called image tracking (or "marker-based AR"). The camera recognizes the card's art, figures out its pose in space, and you render the 3D model on top of it. Options roughly from easiest to most powerful:
+
+Unity + AR Foundation — cross-platform (iOS ARKit + Android ARCore), free, has a built-in ARTrackedImageManager that does exactly this. You create a reference image library containing your card fronts, and when one is detected it spawns a prefab (your 3D model) positioned on the card. The standard tutorials all demo this exact use case. Heads up: tiny cards (~63×88mm) can be finicky to track — you'll want a good well-lit photo as the reference image and may need to tune the physical size parameter.
+8th Wall or Niantic Lightship — web-based AR, no app install, but paid.
+Apple's Reality Composer / RealityKit — iOS-only, drag-and-drop, good if you don't need Android.
+Unreal Engine — overkill for this but works.
+The Pokémon-specific caveat: just so it's on your radar — The Pokémon Company is litigious about fan projects that use their IP, especially anything distributed publicly or monetized. Totally fine as a personal/learning project, but don't put it on the App Store.
+
+Want me to go deeper on either half — a step-by-step for the AR side, or tips on getting the best mesh out of a card image?
+
+You said: Maybe instead of rendering from the card image, it can just detect the pokemon name ffrom looking at the card, and then use a lookup on a site like this https:…
+Maybe instead of rendering from the card image, it can just detect the pokemon name ffrom looking at the card, and then use a lookup on a site like this https://pokemondb.net/sprites to help render the image of that pokemon?
+
+12:04 PM
+Claude responded: That's a much smarter approach actually — you sidestep the whole "AI has to hallucinate a 3D model from flat art" problem and get consistent, recognizable resu…
+That's a much smarter approach actually — you sidestep the whole "AI has to hallucinate a 3D model from flat art" problem and get consistent, recognizable results. Let me think through the pieces.
+
+Let me check what's on that sprite site so I can speak to what you'd actually get:
+
+
+Fetched: Pokémon sprites: archive of Pokémon images from every game
+Fetched: Pokémon sprites: archive of Pokémon images from every game
+Good — one thing that jumps out immediately: pokemondb.net sprites are 2D images, not 3D models. They're game sprites (PNGs from Gen 1 through 9). If you render these on the card, you'd get a 2D sprite standing up billboard-style rather than a true 3D figure the camera can orbit around. That might actually be fine depending on your aesthetic (a pixelated Gen-5 sprite standing on a card has a great vibe), but worth knowing upfront.
+
+So here's the redesigned architecture, which is genuinely cleaner than what we had before:
+
+Step 1 — OCR the card to get the Pokémon name
+
+When the AR image tracker detects a card, crop the top region (where the name sits on every modern TCG card, above the HP value) and run OCR on it. Options:
+
+Apple Vision (iOS) or ML Kit Text Recognition (Android) — free, built-in, fast, on-device. Perfect for this.
+Tesseract — cross-platform, works but less accurate on stylized card fonts.
+The Pokémon TCG name font is clean and consistent, so OCR accuracy should be very high.
+
+Step 2 — Look up the asset
+
+Skip scraping pokemondb.net and use a proper API instead:
+
+PokéAPI (pokeapi.co) — free, no auth, has sprite URLs baked into every Pokémon's JSON response, including official artwork, game sprites from every generation, shiny variants, etc. Just GET /pokemon/charizard and you get back URLs to all the sprites.
+Pokémon TCG API (pokemontcg.io) — if you want the actual card art rendered instead, or want to verify the specific card.
+Step 3 — Render the asset on the card in AR
+
+Here's where you have a real architectural choice to make. The sprites are 2D, so options are:
+
+Billboard quad — render the sprite as a flat plane that always faces the camera. Looks like a paper cutout standing up. Paper Mario aesthetic. Easiest.
+Animated sprite — PokéAPI has the animated showdown sprites (the little idle-bouncing ones from the battle simulator). Same billboard technique but with frame animation. Adds a ton of life.
+Actual 3D model — if you want a real 3D figure, you'd need a separate 3D model library. Pokémon Showdown has free 3D model rips of every Pokémon in GLB format that the community uses, and The Models Resource hosts rips from Sword/Shield, Scarlet/Violet, etc. Rights situation is murky (fan-extracted game assets), so strictly personal-use territory.
+Why this approach is better than what we discussed before
+
+Consistency: every Charizard looks like the Charizard, not "AI's interpretation of a card illustration."
+Speed: no per-card 3D generation wait, no credits burned.
+Scalability: works for all ~1,000+ Pokémon out of the box.
+Cards with art variants, full-arts, and alt-arts all resolve to the same canonical asset.
+The trade-off: you lose the card-specific art. A full-art Charizard ex and a base-set Charizard would render identically. If preserving the card's unique illustration matters, the original AI-generation approach wins; if recognizability matters more, the lookup approach wins.
+
+Want me to sketch out the actual pipeline — like a rough code flow for the iOS or Unity side — or dig into any of these pieces more?
+
+You said: pokeapi can provide a front and back image.
+pokeapi can provide a front and back image. is that enough to render in 3d AR?
+https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/132.png
+https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back/132.png
+
+12:07 PM
+Claude responded: Short answer: not really, but it's closer than one image and there's a clever middle ground worth considering.
+Short answer: not really, but it's closer than one image and there's a clever middle ground worth considering.
+
+Why two views isn't enough for true 3D
+
+To reconstruct a 3D mesh, photogrammetry typically wants 20-50+ views from many angles. With just front and back:
+
+You have zero information about the sides (left profile, right profile)
+No information about top-down or bottom-up angles
+The AI has to hallucinate everything between the two views
+For a Ditto it's actually not terrible because it's blob-shaped and roughly radially symmetric, but for anything with asymmetric features (Charizard's wings, Scyther's scythes, anything holding an item) you'd get weird results
+Some of the image-to-3D AI tools (Meshy, Tripo) do accept multi-view input and front+back is better than front-only, but the side geometry will still be guessed.
+
+The clever middle ground: 2.5D billboard with depth
+
+Here's what actually works well and is way easier to build:
+
+Render the front sprite as a flat plane on the card. When the user's camera moves to view from behind, swap to the back sprite. For side angles, you can either (a) just let it rotate and accept the paper-thin look, or (b) use a billboard that always faces the camera so you only ever see the front.
+
+This is basically how Pokémon looked in Gen 1-5 games — 2D sprites in a 3D world. It has a legitimate retro aesthetic rather than looking broken. And with front+back sprites you get the bonus that if someone walks around the card, they see the Pokémon from behind, which feels surprisingly 3D even though it's two flat planes.
+
+The even cleverer version: cross-plane billboard
+
+Place two perpendicular planes in an X shape — front sprite on one, a rotated/mirrored version on the other. From any angle, at least one plane is reasonably visible, and you get a pseudo-volumetric look. This is how a lot of old-school 3D games rendered trees and grass.
+
+If you want actual 3D, here are the real options
+
+Pokémon Showdown's 3D model repository — community-maintained GLB files for every Pokémon ripped from the mainline games. Not an API, just a GitHub repo you'd bundle or fetch from. Personal/fan-project use only.
+The Models Resource (models-resource.com) — same deal, rips from Sword/Shield and Scarlet/Violet.
+Feed front+back to Meshy/Tripo with multi-view mode — you'd get generated 3D meshes, quality varies wildly by Pokémon. You could pre-generate all 1,000+ once and cache them, rather than doing it live.
+Honestly, for a fun AR project I'd lean toward the billboard approach with the PokéAPI sprites first — you can ship it in a weekend, it looks intentionally stylized, and you can always upgrade to real 3D models later if it's working. Want me to sketch the billboard shader/logic?
+
+You said: ACtually, the showdown gif from pokeapi looks really nice.
+ACtually, the showdown gif from pokeapi looks really nice. could i use that?
+
+12:10 PM
+Claude responded: Yes, and honestly that might be the best answer for this whole project.
+Yes, and honestly that might be the best answer for this whole project. The Showdown animated sprites are probably the sweet spot between "easy to build" and "actually looks cool."
+
+Why they work so well for AR
+
+The Showdown sprites have idle animations — the Pokémon breathes, bobs, flicks a tail, whatever. That tiny bit of motion is what sells the illusion. A static sprite on a card feels like a sticker; an animated sprite feels alive. Your brain fills in a ton of "3D-ness" from animation alone.
+
+They're also designed to be viewed from a single angle (the front-facing battle view), which is actually perfect for a billboard-style render that always faces the camera. You're not fighting the art — you're using it exactly as it was designed.
+
+The technical path
+
+PokéAPI exposes them under sprites.versions['generation-v']['black-white'].animated.front_default (and front_shiny, plus back variants). They're GIFs, typically around 96×96 pixels. The pipeline looks like:
+
+OCR detects "Charizard" on the card
+Fetch the animated GIF URL from PokéAPI
+Decode the GIF into frames
+Render the frames as an animated texture on a billboard plane positioned on the tracked card
+Two gotchas to be aware of
+
+GIF decoding in AR engines: Unity and ARKit don't natively play GIFs on textures. You'll either need a GIF decoder library (for Unity, something like UniGif works) or — easier — pre-process the GIFs into sprite sheets or WebP/APNG on a backend and serve those. If you're going web-based AR (8th Wall, WebXR), GIFs just work in an HTML <img> or as a CSS texture on a plane, which is much simpler.
+
+Resolution: at 96×96 these sprites are tiny. On a phone screen held a foot from the card, they'll look pixelated. That's fine if you're going for the retro aesthetic — lean into it, use nearest-neighbor filtering so the pixels stay crisp instead of getting blurred by bilinear scaling. If you want a cleaner look, the Gen 6+ static sprites are higher res but aren't animated; you could also upscale the animated ones with something like waifu2x as a preprocessing step.
+
+The aesthetic this gets you
+
+Imagine holding up a Charizard card, pointing your phone at it, and a pixel-art Charizard appears standing on the card, breathing and flapping its wings slightly. It's genuinely charming — feels like a Pokédex hologram. The pixelation becomes a feature, not a bug.
+
+This is a much better scope than trying to do real 3D. You could have a working prototype in a weekend with:
+
+iOS: ARKit image tracking + Vision framework OCR + a SKSpriteNode with the GIF frames on a plane
+Web: 8th Wall or MindAR + Tesseract.js + a plane mesh with an animated texture
+Unity: AR Foundation + a GIF decoder package
+Want me to go deeper on any of those three stacks? The web version is probably the fastest to prototype and doesn't require app store anything.
+
+You said: Here's charizard for example https://raw.
+Here's charizard for example https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/showdown/6.gif
+
+12:11 PM
+Claude responded: Yeah, that's exactly the vibe — Charizard doing his little idle bob with the flame flickering.
+Yeah, that's exactly the vibe — Charizard doing his little idle bob with the flame flickering. That's going to look fantastic floating above a card in AR.
+
+A couple things worth noting now that I'm looking at the actual URL structure:
+
+The URL pattern is super clean
+
+.../showdown/{id}.gif where {id} is the National Dex number. Charizard is 6, Pikachu is 25, Mewtwo is 150. Once you OCR the name, you'd hit PokéAPI's /pokemon/{name} endpoint to get the ID, then construct the Showdown sprite URL directly. Or you could just cache a name→ID map locally since it basically never changes (new Pokémon only get added once every few years).
+
+Even simpler: you can skip PokéAPI entirely for the sprite lookup and just use https://play.pokemonshowdown.com/sprites/ani/{name-lowercase}.gif — Showdown serves them by name directly (charizard.gif, mr-mime.gif, etc.). One less API hop.
+
+A nice detail about these sprites
+
+They have transparent backgrounds, which is exactly what you need for AR — the Pokémon floats cleanly on the card without a white box around it. You don't have to do any background removal or chroma keying.
+
+They also come with shiny variants at /shiny/6.gif in the same directory. If you wanted to get fancy, you could roll a 1-in-4096 shiny chance when the card is scanned, matching the in-game rate. Little easter egg that would delight anyone who notices.
+
+One more thing to flag: card size for the AR scale
+
+Standard Pokémon cards are 63×88mm. When you configure your AR image tracking library, you'll set that as the physical dimension of the reference image. Then when you spawn the billboard plane, you'd want the sprite to render at a reasonable size relative to the card — probably 1.5-2x the card height, so Charizard looks like he's about 13-18cm tall standing on a 9cm card. Too small and it looks like a sticker; too big and it dominates the frame and feels off.
+
+If you want to go even further with the illusion, add a subtle soft shadow ellipse on the card beneath the sprite. Takes five minutes and massively sells that the Pokémon is physically standing there rather than floating in the image plane.
+
+Are you leaning toward iOS/Unity/web for this? I can get concrete about the actual code at this point.
+
+You said: can you code a funcitonal prototype i can open on my phone now?
+can you code a funcitonal prototype i can open on my phone  now?
+
+12:12 PM
+Claude responded: Yes — web-based AR is the move here since you can just open a URL on your phone.
+Yes — web-based AR is the move here since you can just open a URL on your phone. Let me build this with MindAR (image tracking) + PokéAPI + the Showdown sprites.
+
+Before I start, one design decision worth flagging: MindAR needs a compiled target image file (.mind format) for each card it should recognize. For a real prototype that tracks actual Pokémon cards, you'd compile card images ahead of time. For right now, I'll build you two things:
+
+A working AR demo that tracks a sample image MindAR provides, with the full Showdown sprite pipeline wired up — you type a Pokémon name (or it cycles through a few) and it renders the animated sprite on the tracked image.
+Instructions for swapping in your own Pokémon card.
+Let me also check one thing — whether OCR is realistic in a browser for this prototype, or if we should punt on that piece for v1.
+
+
+Searched the web
+Searched the web
+Perfect — I have everything I need. The MindAR example ships with a sample target image + .mind file on their CDN, so I can use that as the trackable image and spawn a Pokémon sprite on top of it. You'll print or pull up that sample image on your laptop, point your phone at it, and boom.
+
+Let me build this:
+
+
+Created a file, read a file
+Created a file, read a file
+Here's the prototype — a single HTML file, no build step.
+
+How to run it (the critical part)
+
+AR web apps need HTTPS and camera permission, which means you can't just double-click the HTML file on your phone. You need to serve it over HTTPS. Two easy options:
+
+Option A — GitHub Pages (5 min, free, permanent)
+
+Create a new GitHub repo
+Upload pokemon-ar.html (rename to index.html)
+Settings → Pages → Deploy from main branch
+Open https://yourusername.github.io/reponame/ on your phone
+Option B — ngrok (fastest, for quick testing)
+
+On your computer: python3 -m http.server 8000 in the folder containing the file
+In another terminal: ngrok http 8000
+Open the https:// ngrok URL on your phone
+Option C — Netlify Drop (literally drag and drop)
+
+Go to netlify.com/drop
+Drag the HTML file onto the page
+Get an HTTPS URL instantly, open on phone
+What to point your phone at
+
+The demo uses MindAR's sample card image as the tracking target (a card with a soft-serve ice cream character). Open this on your laptop in a full-screen browser tab, then point your phone at your laptop screen:
+
+https://raw.githubusercontent.com/hiukim/mind-ar-js/master/examples/image-tracking/assets/card-example/card.png
+
+What you should see
+
+Point the phone at the card image → after ~1 second the status badge turns green → a Pokémon appears standing on the card with a little idle bob animation and a soft shadow underneath. Tap the chips at the top to swap between Pikachu, Charizard, Mewtwo, etc., or type any Pokémon name.
+
+What's NOT in this prototype (and why)
+
+OCR of actual card names — browser-based OCR (Tesseract.js) is heavy (~10MB download) and unreliable on stylized fonts. Skipped for v1; the chip buttons simulate what OCR would deliver.
+Tracking real Pokémon cards — MindAR needs a pre-compiled .mind file for each trackable image. You'd compile your card fronts at https://hiukim.github.io/mind-ar-js-doc/tools/compile and swap the imageTargetSrc URL.
+True 3D — it's the billboard approach we discussed (the sprite plane is always flat but gently animated). Looks surprisingly dimensional once you're moving around.
+Once you have it working, the next step is compiling a .mind file from a real card image — want me to walk through that, or do something fancier like wire up the card name → Pokémon mapping for a whole deck of cards?
+
+
+Pokemon ar
+Code · HTML 
+You said: on my phone, i allow camera access, but i just see black screen with white corners and a white horizontal bar moving up and down, buti dont see the actual came…
+on my phone, i allow camera access, but i just see black screen with white corners and a white horizontal bar moving up and down, buti dont see the actual camera video feed
+
+12:21 PM
+Claude responded: That's MindAR's scanning overlay — the white corners and moving bar are the "I'm looking for a target" UI, drawn on top of the video feed.
+That's MindAR's scanning overlay — the white corners and moving bar are the "I'm looking for a target" UI, drawn on top of the video feed. The feed should be behind it. If you're seeing black instead of your room, the camera permission was granted but the video stream isn't getting through.
+
+A few common causes, roughly in order of likelihood:
+
+1. Another app is holding the camera iOS especially is strict about this — if you have the camera app open in another tab, on a video call, or even backgrounded, the AR page gets a black stream. Force-close everything else that might use the camera, then reload the page.
+
+2. You're on iOS and Safari is blocking it silently On iOS, WebRTC camera access must be Safari (or a WebView using Safari's engine). If you opened the link in Chrome for iOS, Firefox for iOS, or any in-app browser (Gmail link preview, Slack, Discord, etc.), the camera can fail silently. Copy the URL and paste it into Safari directly.
+
+3. The page isn't actually HTTPS Camera APIs only work on https:// or localhost. If you used ngrok, make sure you clicked the https:// URL, not http://. If you used Netlify or GitHub Pages, it's HTTPS by default so this isn't the issue.
+
+4. Browser picked the wrong camera Some phones have multiple cameras and the browser occasionally grabs one that's covered or disabled. Try closing the tab completely, reopening, and when the permission prompt reappears, accept it fresh.
+
+5. Low-light / autofocus glitch If the room is very dim or the lens is against a surface, some phones return a black frame until there's enough light. Try pointing it at something well-lit.
+
+Which phone and browser are you on? If you tell me iOS+Safari vs. Android+Chrome I can narrow it down, and I can also add a small debug overlay to the page that shows the raw video element so we can see whether the stream is arriving at all.
+
+You said: opened in safari and still no video feed
+opened in safari and still no video feed
+
+12:23 PM
+Claude responded: Let me add a debug overlay so we can see exactly where it's breaking.
+Let me add a debug overlay so we can see exactly where it's breaking. This version shows the raw video feed, lists any errors, and logs each stage of startup so we can tell whether the camera stream is arriving, whether MindAR is hiding it, or whether permission is failing silently.
+
+
+Created a file, read a file
+Created a file, read a file
+Upload this to the same place you're hosting the main file and open it on your phone. It strips out MindAR entirely and just tries to show the raw camera feed, logging every step.
+
+What to do:
+
+Open it in Safari on your phone
+Tap Start Camera at the bottom
+Grant permission if prompted
+Look at the green log at the top and tell me what it says — specifically, look for any red (error) lines and whether you see video.play() resolved ✓ at the end
+What the result tells us:
+
+Raw video feed appears → the basic camera works; problem is specific to MindAR's rendering. Likely an A-Frame/canvas issue we can fix.
+Black screen but log says Video element playing ✓ → stream is arriving but not rendering. Unusual; could be a z-index or CSS issue.
+Red NotAllowedError → permission wasn't actually granted despite your tap. Need to fix in Settings → Safari → Camera.
+Red NotReadableError → another app has the camera locked.
+Red getUserMedia not available → not actually on HTTPS, or something's wrong with the secure context.
+Also useful to know:
+
+What phone/iOS version?
+How did you host the file — Netlify, GitHub Pages, ngrok, or something else?
+What's the URL (does it start with https://)?
+Copy-paste the log output here and I can pinpoint it fast.
+
+
+Camera debug
+Code · HTML 
+You said: okay, i see the camera feed
+okay, i see the camera feed
+
+12:25 PM
+Claude responded: Good — so the camera itself works fine in Safari.
+Good — so the camera itself works fine in Safari. That means the issue is specific to how MindAR/A-Frame is rendering. Most likely MindAR started before the video element was ready, or its canvas is sitting on top of the video with an opaque background.
+
+Let me make a version that's closer to MindAR's known-working official example, with a couple of tweaks that fix the most common "black screen" issue:
+
+
+Created a file, read a file
+Created a file, read a file
+What changed:
+
+Explicit Start button gate — iOS Safari often blocks camera/WebGL initialization unless it happens inside a user tap handler. The original version tried to auto-start MindAR as soon as the page loaded, which Safari can silently block.
+autoStart: false — tells MindAR to wait, then we call mindarSystem.start() from inside the button click.
+Disabled MindAR's built-in scanning UI (uiScanning: no, uiLoading: no) — the moving white bar you saw. I replaced it with a simpler status pill. This also rules out a bug where that overlay could be covering the video.
+Explicit alpha: true on the renderer — ensures the A-Frame canvas is transparent over the video feed.
+Upload this one, open it in Safari, tap Start AR, grant camera permission, then point at the sample card image. You should see:
+
+Live camera feed (confirmed working from the debug test)
+"Searching for card…" status at the bottom
+When the card is in view: status turns green and Charizard appears standing on it, bobbing
+If you still see black after tapping Start AR, tell me what happens — does the Start gate disappear? Does the status pill show up? That'll narrow it down further.
+
+
+Pokemon ar v2
+Code · HTML 
+You said: i have a mewtwo card.
+i have a mewtwo card. how can i test with that
+
+12:26 PM
+Claude responded: Nice — testing with a real card is the fun part.
+Nice — testing with a real card is the fun part. MindAR needs a "compiled" version of your card's image to recognize it. Here's the full flow:
+
+Step 1: Get a clean image of your Mewtwo card
+
+You need a flat, well-lit photo or scan of the card front. Two easy ways:
+
+Scan it (best): flatbed scanner or a phone scanner app like Apple Notes' "Scan Document" or Google Drive's scan feature. Crop tight to just the card edges.
+Photograph it: lay the card flat on a solid contrasting surface, good even lighting, camera directly overhead (not angled), then crop to just the card. Avoid glare from the holo foil if possible — hold the camera slightly off-axis to dodge reflections.
+Save it as a JPG or PNG, ideally 500-1000px on the long edge. Name it something like mewtwo.png.
+
+Step 2: Compile it into a .mind file
+
+MindAR provides a free web-based compiler. Go to:
+
+👉 https://hiukim.github.io/mind-ar-js-doc/tools/compile
+
+Drag your mewtwo.png onto it, click Start. It'll show you the card with little red dots — those are the "feature points" it'll use to recognize the card. You want to see lots of them scattered across the illustration (Mewtwo's body, the background art, text areas). If you see very few points, the image is too low-contrast or blurry and tracking will be flaky.
+
+When it's done, click Download and save the targets.mind file.
+
+Step 3: Host both files and update the HTML
+
+You need to host targets.mind somewhere the page can fetch it. Easiest options:
+
+Same place you hosted the HTML (Netlify Drop, GitHub Pages, etc.) — just drop targets.mind next to the HTML file.
+GitHub repo — upload it, get the raw URL.
+Then edit the HTML to point at your file instead of MindAR's sample card. Find this line:
+
+mindar-image="imageTargetSrc: https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.mind; ...
+And replace the URL with the URL of your targets.mind. For example if you're using Netlify:
+
+mindar-image="imageTargetSrc: ./targets.mind; ...
+(If targets.mind is in the same folder as the HTML, the relative path ./targets.mind works fine.)
+
+Step 4: Tweak for Mewtwo specifically
+
+Two small improvements worth making once you're testing with a real card:
+
+Set Mewtwo as the default sprite so it loads automatically when the card is detected. Change the <img id="spriteImg"> src to https://play.pokemonshowdown.com/sprites/ani/mewtwo.gif.
+Adjust physical aspect ratio — real Pokémon cards are 63×88mm, aspect ratio 0.716. MindAR assumes width=1 internally, so height should be 1/0.716 ≈ 1.4. The existing sprite positioning should still work but if Mewtwo looks too low or off-center, nudge the position="0 0.4 0" on the sprite plane.
+A heads-up on holo/textured cards
+
+If your Mewtwo is a holofoil or reverse-holo, tracking will be noticeably worse — the shiny surface creates different feature points at every angle and MindAR gets confused. If you have a choice, use a non-holo version for the compiled .mind file. Tracking a regular card with a matte illustration is rock-solid; holos are a gamble. You can still scan a holo card as the image source — the compiled reference just needs to look like what the camera will typically see.
+
+Want me to bake in the Mewtwo-as-default change and give you an updated HTML file so you only have to swap in your own .mind URL?
+
+You said: why do i need to update .
+why do i need to update .mind stuff manually? Can't we use the pokeapi to get the showdown sprite image to use?
+
+12:27 PM
+Claude responded: Ah, I see the confusion — let me clarify what each piece does, because they're solving two totally different problems:
+Ah, I see the confusion — let me clarify what each piece does, because they're solving two totally different problems:
+
+The .mind file is NOT the Pokémon image — it's a fingerprint of what the camera is looking at (your physical card), so MindAR knows where in space the card is sitting.
+
+The Showdown sprite is what gets rendered ON TOP of the detected card — that part already uses PokéAPI/Showdown and works dynamically.
+
+Think of it like this:
+
+.mind file = "here's what a Mewtwo card looks like, so recognize it when you see one"
+Showdown GIF = "here's what to draw once you've found one"
+The reason the .mind has to be pre-compiled is that MindAR's tracking algorithm needs to analyze the reference image offline — finding keypoints, building a feature descriptor database — and that's computationally expensive. It can't do that in real-time on a phone from a URL. The compiled .mind file is essentially a precomputed lookup table.
+
+But here's the good news: you only need to do this once per card design, not once per session. And it's not per-Pokémon either — it's per-card-illustration. A single .mind file can hold many cards compiled together, and when any of them is detected MindAR tells you which one (by index). So you could:
+
+Compile a .mind file containing, say, all 151 Gen 1 base set cards
+Host it once
+When MindAR detects card #7 (Charizard Base Set), look up "charizard" → fetch Showdown sprite → render
+That gives you the dynamic feel you're imagining, where the app "just knows" what Pokémon you're holding up.
+
+Could we skip the .mind entirely?
+
+In principle, yes — you'd need a different technology. Options:
+
+OCR the card name in real time — read "Mewtwo" off the top of the card with Tesseract.js or similar, then fetch the sprite. This doesn't need a .mind at all because you're not doing image matching — you're doing text recognition. But: you lose the spatial tracking. MindAR's whole value-add is knowing where the card is in 3D space so your sprite sits correctly on it. With pure OCR you'd just know which Pokémon, not where the card is, so the sprite would float somewhere on screen rather than standing on the card.
+Generic plane detection + OCR — detect any flat rectangular surface with ARKit/ARCore, OCR it to identify the Pokémon, then anchor the sprite to the detected plane. This is what you're really imagining. But it requires native iOS/Android code (ARKit/ARCore), not browser AR — WebXR doesn't expose plane detection on iOS at all.
+A CNN that recognizes Pokémon cards directly — train a model on all card images, run it on each camera frame, get back "this is Mewtwo at these screen coordinates." Totally doable but way more work than compiling a .mind file.
+So the realistic answer:
+
+For a browser prototype, you compile the .mind once per card (or once per batch of cards) — it's a 30-second step. Everything else stays dynamic. If you want the full "point at any card and it just works" experience, you're looking at a native iOS app using ARKit + Vision framework for OCR, which is a bigger build but absolutely doable.
+
+Want me to sketch what the native iOS version would look like? Or would you rather stick with the web prototype and I'll show you how to compile a multi-card .mind so you can test with a handful of your cards at once?
+
+You said: i want to be able to run it from web.
+i want to be able to run it from web. why cant we just render the sprite on top of the card or on the table near the card without needing a mind file of the card
+
+12:29 PM
+Claude responded: You're right, and honestly this is a better design for your use case.
+You're right, and honestly this is a better design for your use case. Let me think through it properly.
+
+What you actually need
+
+You don't need image matching (MindAR's job). You need:
+
+Find text on the card → "Mewtwo"
+Know where on the camera view to put the sprite → either on top of the text, or anchored to some flat surface
+And crucially, the camera feed is already showing the real card sitting on the real table. If you just overlay a sprite in 2D screen space near the detected text, your brain does the AR work for you — the sprite looks like it's next to the card because the card is right there in the video.
+
+A much simpler architecture
+
+Use the browser's camera feed + Tesseract.js (OCR library) running on every few frames. When it finds Pokémon-like text:
+
+Get the bounding box of the detected word
+Fetch the Showdown sprite for that name
+Draw the sprite on a 2D canvas overlay, positioned at/above that bounding box
+No .mind files. No 3D tracking. No MindAR at all. It'd work on any card — Pokémon, Magic, baseball, handwritten sticky note with "pikachu" on it. The tradeoff: the sprite doesn't truly track with the card in 3D space; if you tilt the card, the sprite doesn't tilt with it. But it does follow the card around the screen because OCR runs continuously.
+
+The honest limitations
+
+Tesseract.js is heavy — about 2-4MB download and ~500ms-2s per OCR pass on a phone. You can't run it every frame; you run it on a throttled interval (say every 500ms) and interpolate the sprite position between readings. Feels smooth enough.
+Stylized fonts are harder — Pokémon card fonts are clean but have effects (outlines, drop shadows). Accuracy will be maybe 70-90% rather than 99%.
+The name region needs to be visible and not blurry — works great when the card is held reasonably still and close; fails when motion-blurred.
+This is genuinely the right approach for what you want. Let me build it:
+
+
+Created a file, read a file
+Created a file, read a file
+How it works in plain English
+
+You tap Start, grant camera permission, see your camera feed
+Tesseract.js loads in the background (takes ~5s first time, then cached)
+It fetches the full list of ~1,300 Pokémon names from PokéAPI once, for fuzzy matching
+Every 700ms it grabs a frame from the video, runs OCR on it, and scans every detected word for anything that looks like a Pokémon name (with typo tolerance — "Mewtwe" → "mewtwo")
+When it finds one, it fetches the Showdown GIF and draws it on a canvas overlay positioned above where it saw the name on the card
+A soft shadow ellipse sits just above the name so it feels like the Pokémon is standing on the card
+What to expect, realistically
+
+First detection takes 1-3 seconds after holding the card steady (OCR has to complete a pass)
+The sprite roughly follows the card as you move it, since OCR re-runs continuously and updates the position
+It's not true AR — the sprite doesn't perspective-warp as you tilt the card. It sits in 2D screen space near the detected text. But with the real card right there in the video frame, the illusion mostly works.
+Accuracy varies: clean matte cards read fine; holos, blurry shots, and weird lighting degrade it
+Tips for best results
+
+Hold the card steady for a moment (motion blur kills OCR)
+Good lighting on the card top, where the name is
+Fill a decent chunk of the frame with the card — zoom in if you can
+Host this wherever you hosted the previous versions and give it a shot with your Mewtwo card. Let me know how the OCR does — if it's flaky, there are specific tweaks (cropping to the top strip of the card, increasing contrast, or using the Pokémon TCG API to confirm matches) that can push accuracy way up.
+
+
+Pokemon ar ocr
+Code · HTML 
+You said: Can we optimize so it identifies the pokemon card shape and then only looks at the text in the top area of the card, hwere the name is?
+Can we optimize so it identifies the pokemon card shape and then only looks at the text in the top area of the card, hwere the name is? I have a bulbasaur card, and it works OK, but sometimes it was detecting text in the body of the card (it says "Leech Seed") and was being detected as "Seel" and rendering that pokemon. It shouldn't analyze the body text though. Also how close to the card do i need to hold the camera?
+
+12:36 PM
+Claude responded: Great observations — these are the exact two refinements that move this from "prototype" to "actually usable.
+Great observations — these are the exact two refinements that move this from "prototype" to "actually usable." Let me address both.
+
+The Seel/Leech Seed false positive
+
+Classic OCR problem. The fix is exactly what you said: detect the card's rectangular outline, then only OCR the top strip where the name lives. On a standard Pokémon card, the name sits in roughly the top 12-15% of the card height, and always in the left-to-center area (HP is on the right).
+
+For card detection without heavy libraries, the trick is: find the largest bright rectangular region in the frame using basic edge detection and contour finding. I'll implement this with plain Canvas 2D — no OpenCV needed, stays lightweight.
+
+How close to the camera
+
+Roughly speaking: the card's name text should be at least ~40-50 pixels tall in the captured frame for OCR to work reliably. With the 1280×720 video capture and a typical phone held at arm's length, that means the card should fill at least 40-50% of the frame height. In practice: hold it about 6-12 inches from the phone, with the card taking up most of the width.
+
+Once we add the card detection + cropping, this gets more forgiving because we're zooming in on just the name region before OCRing, effectively giving us higher resolution on the text.
+
+Let me build the improved version:
+
+
+Created a file, read a file
+Created a file, read a file
+What changed
+
+Card detection — finds the largest bright-ish connected region in the frame. Pokémon cards have that yellow/cream border that stands out reliably against most backgrounds (tables, carpet, etc.). Shows a yellow rectangle around the detected card in real time so you can see it working.
+Name-only OCR — once the card is detected, we only extract the top ~13% × 65% width region (the name band), upscale it 3x for clarity, boost contrast, and send only that to OCR. Seel/Leech Seed false positive should be gone — OCR never sees the card body. Shows a blue dashed rectangle marking the name region, plus a live debug preview in the bottom-right corner showing exactly what Tesseract is seeing.
+Min name length = 4 characters — prevents spurious short words like "ex", "V", "GX" from matching (before this, "ex" could match "Exeggcute" or similar via fuzzy matching).
+Better positioning — now that we know the card's bounding box, the sprite is centered on the card and sized relative to the card, so it looks properly anchored. It also includes an idle bob animation even between OCR passes.
+Richer status text — shows the raw OCR output, matched name, confidence, and edit distance so you can diagnose bad reads.
+How close to hold the camera
+
+With card detection in the loop, ideal framing is:
+
+Card fills roughly 40-70% of the frame — too close and the border gets cropped off and detection fails; too far and the name text is too small to OCR
+About 8-14 inches (20-35cm) for a typical phone
+Name area should appear at least 50px tall in the preview — you can tell if it's good by looking at the debug strip in the corner; if the name looks sharp and readable there, Tesseract will get it
+What to watch for when testing
+
+Yellow rectangle appears → card detected correctly
+Blue dashed rectangle on top of the card → name region isolated
+Debug preview (bottom-right) shows clean, readable "BULBASAUR" text → OCR will succeed
+If the yellow box is hunting around and jumping — your background is probably too similar in brightness to the card. Move to a darker surface (wood table, dark fabric).
+Known limitations of this card detector
+
+Fails on similar-brightness backgrounds — white table, bright paper, sunlight glare. Move to a contrasting surface.
+Fails if the card is angled significantly — this is an axis-aligned bounding box, not a true quad. Keep the card roughly parallel to the phone.
+Can get confused by other bright rectangles in view — a second card, a sheet of paper, a phone screen in the frame. Frame just the one card.
+Give this a spin with your Bulbasaur and let me know — especially watch the debug preview in the bottom-right corner. If it's showing a clean crop of "BULBASAUR" and still getting misreads, the fix is OCR-side (different engine settings). If the crop itself is off (too low, too narrow, rotated), the fix is in the name-region math.
+
+
+Pokemon ar ocr v2
+Code · HTML 
+You said: i ran out of free netflify, how can i test
+i ran out of free netflify, how can i test
+
+12:41 PM
+Claude responded: Lots of good free options that won't run into the same limits.
+Lots of good free options that won't run into the same limits. Here are the easiest in order:
+
+1. Cloudflare Pages (recommended)
+
+Unlimited bandwidth on the free tier, which is what Netlify cut you off on. Setup is nearly identical — drag & drop or connect a Git repo.
+
+Go to https://pages.cloudflare.com
+Sign up (free), click "Create a project" → "Upload assets"
+Drag your HTML file, it gives you an HTTPS URL in seconds
+2. GitHub Pages
+
+Free, unlimited, permanent. Slightly more steps because it's Git-based:
+
+Create a new public repo at github.com
+Upload your HTML file, renamed to index.html
+Settings → Pages → Source: Deploy from main branch → Save
+Wait ~30 seconds, your site is at https://yourusername.github.io/reponame/
+3. Vercel
+
+Similar to Netlify, free tier has generous limits. https://vercel.com — "Add New" → drag a folder with your HTML in it.
+
+4. ngrok (for quick local testing)
+
+If you just want to test right now without signing up anywhere new:
+
+# In the folder with your HTML file:
+python3 -m http.server 8000
+
+# In another terminal:
+npx ngrok http 8000
+Ngrok gives you an HTTPS URL that tunnels to your local machine. Free tier limits you to 2-hour sessions but it's perfect for iterating. Only catch: the URL changes each time you restart ngrok.
+
+5. Glitch
+
+https://glitch.com — create a new project, paste your HTML, it's instantly live on HTTPS. Nice for quick tweaks because you can edit code right in the browser and see changes on your phone immediately.
+
+My pick for you: Cloudflare Pages if you want a permanent URL, Glitch if you want to keep iterating on the code without re-uploading each time. Both take about 2 minutes to set up.
+
+Want me to walk through any of them in detail?
+
+You said: how do i upload html on github
+how do i upload html on github
+
+12:46 PM
+Claude responded: Here's the fastest way, all through the GitHub website — no command line needed:
+Here's the fastest way, all through the GitHub website — no command line needed:
+
+1. Create the repo
+
+Go to https://github.com and sign in (make an account if you don't have one)
+Click the green New button (or the + in the top right → New repository)
+Repository name: anything, e.g. pokemon-ar
+Make sure Public is selected (GitHub Pages requires this on free accounts)
+Check the box Add a README file (this creates the repo so you can upload to it)
+Click Create repository
+2. Upload your HTML
+
+On the new repo page, click Add file (button near the top right) → Upload files
+Drag your pokemon-ar-ocr-v2.html into the drop zone, OR click "choose your files"
+Important: before committing, you want the file named index.html so the URL works cleanly. Either rename it on your computer first, or upload it as-is and rename after.
+Scroll down, click Commit changes
+To rename after uploading: click on the file in the repo, click the pencil (edit) icon, change the filename at the top to index.html, commit.
+
+3. Enable GitHub Pages
+
+In the repo, click Settings (top nav, far right)
+In the left sidebar, click Pages
+Under "Build and deployment" → Source: select Deploy from a branch
+Branch: select main and / (root), click Save
+Wait ~30-60 seconds
+4. Get your URL
+
+Refresh the Pages settings screen. It'll show:
+Your site is live at https://yourusername.github.io/pokemon-ar/
+
+Open that on your phone in Safari
+Common gotchas
+
+If you see a 404 when you first visit, give it another minute — deployment takes 30-90 seconds the first time
+If the file isn't named index.html, you'll need to visit the full path like https://yourusername.github.io/pokemon-ar/pokemon-ar-ocr-v2.html
+If you later edit the HTML, just upload the new version (same filename, "Add file" → "Upload files" overwrites). Changes go live in under a minute.
+Want me to wait while you try it, or is there something else I can help with?
+
+You said: i dont see add file
+1776793687310_image.png
+i dont see add file
+
+12:48 PM
+Claude responded: You're on the right track — the repo is created (PokeAR, public, good).
+You're on the right track — the repo is created (PokeAR, public, good). You just created an empty repo without the README checkbox, which is why the "Add file" button isn't showing up yet. No problem, there's a shortcut right on your screen.
+
+See the blue box that says "Quick setup — if you've done this kind of thing before"? Just below it:
+
+Get started by creating a new file or uploading an existing file
+
+Click the "uploading an existing file" link. That takes you straight to the upload page.
+
+Then:
+
+Drag pokemon-ar-ocr-v2.html onto the upload area
+Below the file list, there's a filename shown — rename it to index.html by clicking on it (or just rename the file on your computer first before uploading)
+Scroll down, click the green Commit changes button
+After that, the file list view will appear and "Add file" will show up in the top right for future uploads.
+
+Then head to Settings → Pages in the top nav, set source to main branch, save, and wait ~60 seconds. Your URL will be:
+
+https://nickuhlenhuth.github.io/PokeAR/
+
+Let me know when it's live and we can debug anything that's off.
+
+You said: The blue box is way too strict, and i have to have the top of the card basically all the way at the top of the viewport, so i don't ever see the sprite.
+The blue box is way too strict, and i have to have the top of the card basically all the way at the top of the viewport, so i don't ever see the sprite.
+It detected the name when maneuvered properly. But the blue box should have much more vertical leniency. It's only the bottom half of the card that we should avoid. Also, I didn't get a sense that the yellow border was related to the card at all. There was essentially always a yellow border around the whole viewport, and it never adjusted to the detected card
+
+12:57 PM
+Claude responded: Two clear bugs based on what you're seeing:
+Two clear bugs based on what you're seeing:
+
+1. The yellow box = the whole viewport means the card detector is failing and instead finding the brightest connected region in the frame, which is... basically the whole frame (lit room, walls, etc. all pass the brightness threshold and connect via the background). The detector isn't actually locking onto the card.
+
+2. The blue name region is too tight — we over-constrained it. You're right that the real rule is "avoid the bottom half" rather than "only the top 13%." Let me widen it significantly.
+
+While I'm at it, I'll also make the sprite render even when card detection fails, falling back to full-frame OCR but still respecting the "top half only" crop. That way you always get something working.
+
+Let me rethink the card detector too. The problem with "brightest connected region" is that backgrounds are often brighter than card borders. A more reliable signal for a Pokémon card is actually the yellow border itself — it has a distinctive hue that most backgrounds don't. Let me detect by color instead of brightness.
+
+
+Created a file, read a file
+Created a file, read a file
+Key changes:
+
+Yellow-hue card detection instead of brightness — actually looks for the Pokémon card's yellow border color by checking each pixel's RGB. Specifically: R and G both fairly high, B noticeably lower, and R ≈ G (that's what yellow looks like in RGB). This should genuinely lock onto just the card and not the whole scene.
+Name region is now the entire top HALF of the card — was 13% tall, now 50% tall; was 65% wide, now 80% wide. "Leech Seed" and other body text still gets excluded, but you have way more vertical slack.
+Sprite flips below the card if it would go off-screen — if the card is near the top of the viewport and there's no room above it for the sprite, it renders below the card instead. No more needing to position the card perfectly.
+Fallback mode when card isn't detected — instead of failing silently, it OCRs the top half of the whole frame. In this mode, no yellow box is drawn (since we're not actually tracking a card), and the sprite renders in the center of the screen. You can tell which mode you're in because the status bar will say yellow-border or fallback-full-frame.
+Yellow box only drawn when actually detected — if you don't see a yellow box, the card detector legitimately didn't find anything and you're in fallback mode. This matches reality instead of drawing a misleading viewport border.
+What to look for when testing:
+
+Yellow box hugging the card = card detector working ✓
+No yellow box but sprite appears = fallback mode, OCR still working
+Debug strip (bottom right) = should show the name clearly regardless of mode
+Status bar bottom = tells you yellow-border vs fallback-full-frame
+If yellow detection still doesn't work:
+
+The most likely culprit would be that your card's border isn't matching my RGB thresholds — either due to white balance from your phone's camera, lighting color temperature, or the card being a newer style with different border tones. If that happens, tell me what color the border looks like on your phone screen and I can widen the thresholds. The fallback mode means it should at least keep detecting names regardless.
+
+Also — the sprite flip logic means you should now always see your Pokémon somewhere on screen when it's detected, even if the card is awkwardly framed.
+
+
+Pokemon ar ocr v3
+Code · HTML 
+You said: We can't use yellow border of the card because not all cards have a yellow border.
+We can't use yellow border of the card because not all cards have a yellow border. Can't we just detect a rectangular shape?
+
+12:59 PM
+Claude responded: You're totally right — modern Pokémon cards (Scarlet & Violet era) have silver borders, promos have various colors, and plenty of cards have no prominent color…
+You're totally right — modern Pokémon cards (Scarlet & Violet era) have silver borders, promos have various colors, and plenty of cards have no prominent colored border at all. Rectangle detection is the proper general solution.
+
+The classic approach is:
+
+Convert the frame to grayscale
+Run an edge detector (Sobel or similar) to find where brightness changes sharply
+Find contours (connected edges)
+Look for quadrilateral contours — four corners at roughly right angles
+Pick the largest one that looks card-shaped (aspect ratio ~0.716)
+This is what OpenCV would normally do in one function call. Doing it in pure JavaScript/Canvas from scratch is a lot of code and gets flaky. But there's a better option:
+
+OpenCV.js — the real OpenCV library compiled to WebAssembly. It's a ~8MB download (one-time, cached after), but it handles all of this with battle-tested algorithms. findContours + approxPolyDP gives you actual card quadrilaterals, including when they're tilted or partially perspective-warped. Way more robust than anything I'd hand-roll.
+
+Let me rebuild the detector using OpenCV.js. The approach:
+
+Grayscale → Gaussian blur (reduces noise) → Canny edge detection
+Find all contours, approximate each as a polygon
+Keep polygons with 4 vertices and reasonable size
+Among those, pick the one most card-shaped (aspect ratio) and closest to a convex rectangle
+Use the quad's corners to warp the card to a flat rectangle (this also fixes the perspective issue!) then crop the top half for OCR
+That last point is a genuinely nice side effect — we can use the detected quadrilateral to un-tilt the card before OCR, so it works even when the card is held at an angle.
+
+
+Created a file, read a file
+Created a file, read a file
+What's different:
+
+Proper rectangle detection via OpenCV.js — works on any card design, any color border. The pipeline is: grayscale → Gaussian blur → Canny edge detection → contour finding → pick the largest quadrilateral with a card-ish aspect ratio.
+Perspective correction — once we have the four corners, we warp the card to a flat, un-tilted rectangle before OCR. This means you can hold the card at any angle and the name will still be extracted cleanly. This is a genuinely big win.
+Auto-rotation for sideways cards — if you hold the card landscape, the warp rotates it to portrait automatically so the name ends up on top.
+Yellow outline now shows the actual 4 corners of the detected quad, not an axis-aligned bounding box. You'll see it follow the shape of the tilted card exactly.
+Still has fallback mode — if no rectangle is found, falls back to full-frame top-half OCR.
+Load time note: OpenCV.js is about 8MB and takes ~5-10 seconds to load the first time. After that it's cached in the browser. The status bar will say "Loading OpenCV + OCR…" during this.
+
+What to look for:
+
+Yellow quad hugging the card corners (not a rectangle — an actual 4-sided polygon that follows any tilt) = working correctly
+Debug strip showing a clean, un-tilted view of the name = perspective correction doing its job
+Status shows quad vs fallback so you know which detection path is running
+Tips for best rectangle detection:
+
+Contrasting background — card on a dark table works way better than card on white paper
+Full card visible in frame, not cropped
+Reasonable lighting — Canny edge detection needs visible edges
+This should now work with your Bulbasaur regardless of tilt, and with silver-bordered modern cards, promos, anything rectangular. Give it a shot and let me know how it goes.
+
+
+Pokemon ar ocr v4
+Code · HTML 
+
+
+
+
+Claude is AI and can make mistakes. Please double-check responses.
+Pokemon ar ocr v4 · HTML
+Copy
+
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Pokémon Card AR (OCR v2)</title>
-
+  <title>Pokémon Card AR v4</title>
+ 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window._cvReady=true"></script>
+ 
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
                  font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #000; color: white; }
-
+ 
     #stage { position: fixed; inset: 0; overflow: hidden; }
     #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
     #video { object-fit: cover; background: #000; }
     #overlay { pointer-events: none; }
-
-    /* Debug preview of the cropped name strip */
+ 
     #debugStrip {
       position: fixed; bottom: 12px; right: 12px; z-index: 30;
-      width: 160px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
-      background: rgba(0,0,0,0.5); display: none;
+      width: 180px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      background: rgba(0,0,0,0.6); display: none;
     }
     #debugStrip canvas { display: block; width: 100%; }
     #debugStrip .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
-
+ 
     #startGate {
       position: fixed; inset: 0; z-index: 100;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -38,7 +797,7 @@
       border: none; border-radius: 12px; background: #ffcb05; color: #1a1a1a;
     }
     #startBtn:disabled { opacity: 0.6; }
-
+ 
     #status {
       position: fixed; top: 12px; left: 12px; right: 12px; z-index: 20;
       background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
@@ -47,34 +806,34 @@
     #detected {
       position: fixed; bottom: 12px; left: 12px; z-index: 20;
       background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
-      font-size: 12px; backdrop-filter: blur(8px);
+      font-size: 11px; backdrop-filter: blur(8px);
       font-family: ui-monospace, Menlo, monospace;
-      max-width: calc(100% - 200px);
+      max-width: calc(100% - 210px);
     }
   </style>
 </head>
 <body>
-
+ 
 <div id="startGate">
   <h1>🔮 Pokémon Card AR</h1>
-  <p>Hold a Pokémon card in front of the camera. The app finds the card, reads just the name area, and summons the Pokémon.</p>
-  <p style="font-size:12px;color:#888;">Tip: hold the card 6–12 inches from camera, filling most of the frame, well lit, reasonably flat.</p>
+  <p>Hold any card in view. Detects rectangular cards of any design, un-tilts them, reads the name, and summons the Pokémon.</p>
+  <p style="font-size:12px;color:#888;">Using OpenCV + Tesseract. First load is ~10 seconds.</p>
   <button id="startBtn">Start Camera</button>
 </div>
-
+ 
 <div id="stage">
   <video id="video" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
 </div>
-
+ 
 <div id="debugStrip">
   <div class="lbl">Name region (what OCR sees):</div>
   <canvas id="debugCanvas"></canvas>
 </div>
-
+ 
 <div id="status" style="display:none;">Initializing…</div>
 <div id="detected" style="display:none;">—</div>
-
+ 
 <script>
   const video = document.getElementById('video');
   const overlay = document.getElementById('overlay');
@@ -86,27 +845,29 @@
   const debugStrip = document.getElementById('debugStrip');
   const debugCanvas = document.getElementById('debugCanvas');
   const debugCtx = debugCanvas.getContext('2d');
-
-  // Hidden canvases for processing
+ 
   const frameCanvas = document.createElement('canvas');
   const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
+  // warpedCanvas holds the perspective-corrected card
+  const warpedCanvas = document.createElement('canvas');
+  // nameCanvas is the cropped top portion sent to OCR
   const nameCanvas = document.createElement('canvas');
   const nameCtx = nameCanvas.getContext('2d');
-
+ 
   let worker = null;
-  let current = null;   // { name, img, cardBox, nameBox, lastSeen }
+  let current = null;        // { name, img, quad, lastSeen }
   let spriteCache = {};
   let pokemonNameSet = null;
   let ocrRunning = false;
-  let detectedCardBox = null;  // Last detected card rectangle in video coords
-
-  // --- Fetch Pokemon names for matching ---
+  let detectedQuad = null;   // Latest detected card corners (video coords): [{x,y}*4]
+  let detectionMode = 'searching';  // 'quad' | 'fallback' | 'searching'
+ 
   async function loadPokemonList() {
     const res = await fetch('https://pokeapi.co/api/v2/pokemon?limit=2000');
     const data = await res.json();
     pokemonNameSet = new Set(data.results.map(p => p.name.toLowerCase()));
   }
-
+ 
   function editDistance(a, b) {
     const m = a.length, n = b.length;
     if (!m) return n; if (!n) return m;
@@ -118,14 +879,12 @@
     }
     return dp[m][n];
   }
-
+ 
   function findBestMatch(raw) {
     if (!pokemonNameSet) return null;
     const cleaned = raw.toLowerCase().replace(/[^a-z]/g, '');
-    if (cleaned.length < 4) return null;  // require at least 4 chars - skips "ex", "v", etc.
-
+    if (cleaned.length < 4) return null;
     if (pokemonNameSet.has(cleaned)) return { name: cleaned, dist: 0 };
-
     let best = null, bestDist = Infinity;
     const maxDist = Math.max(1, Math.floor(cleaned.length * 0.25));
     for (const name of pokemonNameSet) {
@@ -135,7 +894,7 @@
     }
     return bestDist <= maxDist ? { name: best, dist: bestDist } : null;
   }
-
+ 
   async function getSpriteFor(name) {
     if (spriteCache[name]) return spriteCache[name];
     return new Promise((resolve) => {
@@ -156,131 +915,222 @@
       img.src = `https://play.pokemonshowdown.com/sprites/ani/${name}.gif`;
     });
   }
-
-  // --- CARD DETECTION ---
-  // Strategy: find the largest bright-ish rectangular region.
-  // Pokemon cards have a yellow border which is reliably brighter than typical backgrounds.
-  // We threshold for "not too dark" pixels, find the largest connected component,
-  // and take its bounding box as the card.
-  function detectCardBox(imgData) {
-    const { data, width, height } = imgData;
-    // Binary mask: bright enough = card candidate
-    const mask = new Uint8Array(width * height);
-    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-      const r = data[i], g = data[i+1], b = data[i+2];
-      const luma = 0.299*r + 0.587*g + 0.114*b;
-      mask[p] = luma > 90 ? 1 : 0;
-    }
-
-    // Flood-fill to find largest connected bright region
-    const visited = new Uint8Array(width * height);
-    let bestArea = 0, bestBox = null;
-    const step = 4;  // subsample seed points for speed
-    const stack = [];
-    for (let sy = 0; sy < height; sy += step) {
-      for (let sx = 0; sx < width; sx += step) {
-        const idx = sy * width + sx;
-        if (!mask[idx] || visited[idx]) continue;
-        stack.length = 0;
-        stack.push(idx);
-        let area = 0, minX = sx, minY = sy, maxX = sx, maxY = sy;
-        while (stack.length) {
-          const p = stack.pop();
-          if (visited[p] || !mask[p]) continue;
-          visited[p] = 1;
-          area++;
-          const x = p % width, y = (p - x) / width;
-          if (x < minX) minX = x; if (x > maxX) maxX = x;
-          if (y < minY) minY = y; if (y > maxY) maxY = y;
-          if (x > 0) stack.push(p - 1);
-          if (x < width - 1) stack.push(p + 1);
-          if (y > 0) stack.push(p - width);
-          if (y < height - 1) stack.push(p + width);
+ 
+  // --- OpenCV rectangle detection ---
+  // Returns an array of 4 corner points [{x,y}] in video-frame coordinates,
+  // ordered top-left, top-right, bottom-right, bottom-left.
+  // This runs on a downscaled image for speed.
+  function detectCardQuad() {
+    if (!window.cv || !window._cvReady) return null;
+ 
+    const scale = 0.35;
+    const w = Math.floor(video.videoWidth * scale);
+    const h = Math.floor(video.videoHeight * scale);
+ 
+    // Draw downscaled frame to a temp canvas
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').drawImage(video, 0, 0, w, h);
+ 
+    const src = cv.imread(tmp);
+    const gray = new cv.Mat();
+    const blurred = new cv.Mat();
+    const edges = new cv.Mat();
+    const dilated = new cv.Mat();
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+ 
+    try {
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+      cv.Canny(blurred, edges, 50, 150);
+      // Dilate edges to close small gaps in the card outline
+      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      cv.dilate(edges, dilated, kernel);
+      kernel.delete();
+ 
+      cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+ 
+      let bestQuad = null;
+      let bestArea = 0;
+      const minArea = w * h * 0.05;   // at least 5% of frame
+      const maxArea = w * h * 0.95;
+ 
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+        if (area < minArea || area > maxArea) { cnt.delete(); continue; }
+ 
+        const peri = cv.arcLength(cnt, true);
+        const approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+ 
+        if (approx.rows === 4 && cv.isContourConvex(approx)) {
+          // Check aspect ratio is plausibly card-shaped
+          const pts = [];
+          for (let j = 0; j < 4; j++) {
+            pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
+          }
+          const ordered = orderQuadCorners(pts);
+          const wTop = dist(ordered[0], ordered[1]);
+          const wBot = dist(ordered[3], ordered[2]);
+          const hLef = dist(ordered[0], ordered[3]);
+          const hRig = dist(ordered[1], ordered[2]);
+          const avgW = (wTop + wBot) / 2;
+          const avgH = (hLef + hRig) / 2;
+          // Pokemon card aspect is ~0.716 but we allow wide tolerance for perspective
+          // and orientation (portrait ~0.5-1.0, landscape ~1.0-2.0)
+          const ratio = avgW / avgH;
+          const ok = (ratio >= 0.45 && ratio <= 0.95) || (ratio >= 1.05 && ratio <= 2.2);
+ 
+          if (ok && area > bestArea) {
+            bestArea = area;
+            bestQuad = ordered.map(p => ({ x: p.x / scale, y: p.y / scale }));
+          }
         }
-        if (area > bestArea) {
-          bestArea = area;
-          bestBox = { x0: minX, y0: minY, x1: maxX, y1: maxY, area };
-        }
+ 
+        approx.delete();
+        cnt.delete();
       }
+ 
+      return bestQuad;
+    } finally {
+      src.delete();
+      gray.delete();
+      blurred.delete();
+      edges.delete();
+      dilated.delete();
+      contours.delete();
+      hierarchy.delete();
     }
-
-    if (!bestBox) return null;
-
-    const bw = bestBox.x1 - bestBox.x0;
-    const bh = bestBox.y1 - bestBox.y0;
-    const totalArea = width * height;
-
-    // Sanity checks: must be a reasonable fraction of the frame and roughly card-shaped
-    if (bestBox.area < totalArea * 0.08) return null;
-    if (bw < 40 || bh < 60) return null;
-
-    // Pokemon cards are ~0.716 aspect (w/h). Allow some rotation/perspective, so 0.45-1.2.
-    // If the card is held sideways the ratio flips.
-    const ratio = bw / bh;
-    if (ratio < 0.35 || ratio > 2.2) return null;
-
-    // Fill ratio — bright area should occupy most of the bounding box (i.e., it's roughly
-    // rectangular, not some jagged shape)
-    const fill = bestBox.area / (bw * bh);
-    if (fill < 0.55) return null;
-
-    return bestBox;
   }
-
-  // --- Extract the name strip from the detected card ---
-  // For a portrait-oriented Pokemon card, the name is in the top ~13% of the card height,
-  // and roughly the left 65% of the width (HP + energy symbol are on the right).
-  function extractNameStrip(videoFrameCanvas, cardBox) {
-    const bw = cardBox.x1 - cardBox.x0;
-    const bh = cardBox.y1 - cardBox.y0;
-
-    // Detect orientation: portrait (typical) vs landscape (card held sideways)
-    const portrait = bh >= bw;
-
-    let stripX, stripY, stripW, stripH;
-    if (portrait) {
-      // Top ~17% of card, left 70% of width (skip HP)
-      stripX = cardBox.x0 + bw * 0.05;
-      stripY = cardBox.y0 + bh * 0.04;
-      stripW = bw * 0.65;
-      stripH = bh * 0.13;
+ 
+  function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+ 
+  // Order 4 points as [top-left, top-right, bottom-right, bottom-left]
+  // using sum and diff of coordinates (standard trick).
+  function orderQuadCorners(pts) {
+    const sums = pts.map(p => p.x + p.y);
+    const diffs = pts.map(p => p.x - p.y);
+    const tl = pts[sums.indexOf(Math.min(...sums))];
+    const br = pts[sums.indexOf(Math.max(...sums))];
+    const tr = pts[diffs.indexOf(Math.max(...diffs))];
+    const bl = pts[diffs.indexOf(Math.min(...diffs))];
+    return [tl, tr, br, bl];
+  }
+ 
+  // Warp the detected quad to a flat rectangle using the full-res frame.
+  // Output width/height we choose based on typical card proportions.
+  function warpQuadToFlat(quad) {
+    // Desired output size - portrait orientation, card aspect 0.716
+    const outW = 500;
+    const outH = Math.round(outW / 0.716);
+ 
+    // But: if the detected quad is wider than tall, the card is held sideways —
+    // let's rotate to portrait so name always ends up on top.
+    const quadW = (dist(quad[0], quad[1]) + dist(quad[3], quad[2])) / 2;
+    const quadH = (dist(quad[0], quad[3]) + dist(quad[1], quad[2])) / 2;
+    const landscape = quadW > quadH;
+ 
+    const src = cv.imread(frameCanvas);
+    const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      quad[0].x, quad[0].y,
+      quad[1].x, quad[1].y,
+      quad[2].x, quad[2].y,
+      quad[3].x, quad[3].y
+    ]);
+ 
+    let dstPts;
+    if (landscape) {
+      // Rotate 90° counterclockwise by mapping tl→bl, tr→tl, br→tr, bl→br
+      dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        0, outH,
+        0, 0,
+        outW, 0,
+        outW, outH
+      ]);
     } else {
-      // Landscape held - name on left edge, vertical. Fall back to top-left chunk.
-      stripX = cardBox.x0 + bw * 0.04;
-      stripY = cardBox.y0 + bh * 0.05;
-      stripW = bw * 0.13;
-      stripH = bh * 0.65;
+      dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        0, 0,
+        outW, 0,
+        outW, outH,
+        0, outH
+      ]);
     }
-
-    // Upscale the strip to 3x for better OCR accuracy
-    const upscale = 3;
+ 
+    const M = cv.getPerspectiveTransform(srcPts, dstPts);
+    const dst = new cv.Mat();
+    cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+ 
+    warpedCanvas.width = outW;
+    warpedCanvas.height = outH;
+    cv.imshow(warpedCanvas, dst);
+ 
+    src.delete(); srcPts.delete(); dstPts.delete(); M.delete(); dst.delete();
+    return warpedCanvas;
+  }
+ 
+  // Extract the name strip from the warped card (top half, left 80%)
+  function extractNameStrip(sourceCanvas) {
+    const w = sourceCanvas.width, h = sourceCanvas.height;
+    const stripX = Math.floor(w * 0.03);
+    const stripY = Math.floor(h * 0.02);
+    const stripW = Math.floor(w * 0.80);
+    const stripH = Math.floor(h * 0.50);
+ 
+    const upscale = 2;
     nameCanvas.width = stripW * upscale;
     nameCanvas.height = stripH * upscale;
     nameCtx.imageSmoothingEnabled = true;
     nameCtx.imageSmoothingQuality = 'high';
-    nameCtx.drawImage(videoFrameCanvas, stripX, stripY, stripW, stripH, 0, 0, nameCanvas.width, nameCanvas.height);
-
-    // Boost contrast — helps OCR a lot
+    nameCtx.drawImage(sourceCanvas, stripX, stripY, stripW, stripH, 0, 0, nameCanvas.width, nameCanvas.height);
+ 
+    // Contrast boost
     const imgData = nameCtx.getImageData(0, 0, nameCanvas.width, nameCanvas.height);
     const d = imgData.data;
     for (let i = 0; i < d.length; i += 4) {
-      // Luma
       const l = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-      // S-curve: darken darks, brighten lights
-      const boosted = l < 128 ? Math.max(0, l - 20) : Math.min(255, l + 20);
+      const boosted = l < 128 ? Math.max(0, l - 15) : Math.min(255, l + 15);
       d[i] = d[i+1] = d[i+2] = boosted;
     }
     nameCtx.putImageData(imgData, 0, 0);
-
-    // Show in debug preview
+ 
     debugCanvas.width = nameCanvas.width;
     debugCanvas.height = nameCanvas.height;
     debugCtx.drawImage(nameCanvas, 0, 0);
-
-    return { strip: nameCanvas, stripBox: { x0: stripX, y0: stripY, x1: stripX + stripW, y1: stripY + stripH } };
   }
-
-  // --- Start ---
+ 
+  // Fallback: OCR top half of full frame if no quad found
+  function extractFallbackStrip() {
+    const stripW = Math.floor(video.videoWidth * 0.9);
+    const stripH = Math.floor(video.videoHeight * 0.5);
+    const stripX = Math.floor(video.videoWidth * 0.05);
+    const stripY = 0;
+ 
+    nameCanvas.width = stripW;
+    nameCanvas.height = stripH;
+    nameCtx.drawImage(frameCanvas, stripX, stripY, stripW, stripH, 0, 0, stripW, stripH);
+ 
+    debugCanvas.width = nameCanvas.width;
+    debugCanvas.height = nameCanvas.height;
+    debugCtx.drawImage(nameCanvas, 0, 0);
+  }
+ 
+  async function waitForOpenCV() {
+    if (window._cvReady && window.cv && cv.Mat) return;
+    await new Promise(resolve => {
+      const check = () => {
+        if (window._cvReady && window.cv && cv.Mat) resolve();
+        else setTimeout(check, 100);
+      };
+      check();
+    });
+    // Sometimes cv is a Promise
+    if (cv instanceof Promise) {
+      await cv;
+    }
+  }
+ 
   async function start() {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
@@ -291,21 +1141,22 @@
       });
       video.srcObject = stream;
       await video.play();
-
+ 
       startGate.style.display = 'none';
       statusEl.style.display = 'block';
       detectedEl.style.display = 'block';
       debugStrip.style.display = 'block';
-
-      statusEl.textContent = 'Loading OCR (first time ~5s)…';
+ 
+      statusEl.textContent = 'Loading OpenCV + OCR…';
+      await waitForOpenCV();
       await loadPokemonList();
-
+ 
       worker = await Tesseract.createWorker('eng');
       await worker.setParameters({
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
       });
-
-      statusEl.textContent = 'Show me a Pokémon card 🎯';
+ 
+      statusEl.textContent = 'Ready — show me a card 🎯';
       resizeOverlay();
       window.addEventListener('resize', resizeOverlay);
       requestAnimationFrame(renderLoop);
@@ -316,58 +1167,38 @@
       startBtn.textContent = 'Start Camera';
     }
   }
-
+ 
   function resizeOverlay() {
     overlay.width = overlay.clientWidth * window.devicePixelRatio;
     overlay.height = overlay.clientHeight * window.devicePixelRatio;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
   }
-
-  // --- Main processing: detect card, crop name strip, OCR it ---
+ 
   async function processFrame() {
     if (ocrRunning || !worker || !video.videoWidth) return;
     ocrRunning = true;
     try {
-      // Use lower-res frame for card detection (fast)
-      const detectScale = 0.35;
       frameCanvas.width = video.videoWidth;
       frameCanvas.height = video.videoHeight;
       frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
-
-      // Downscaled copy for detection
-      const detCanvas = document.createElement('canvas');
-      detCanvas.width = video.videoWidth * detectScale;
-      detCanvas.height = video.videoHeight * detectScale;
-      const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
-      detCtx.drawImage(video, 0, 0, detCanvas.width, detCanvas.height);
-      const imgData = detCtx.getImageData(0, 0, detCanvas.width, detCanvas.height);
-
-      const smallBox = detectCardBox(imgData);
-      if (!smallBox) {
-        detectedCardBox = null;
-        statusEl.textContent = 'No card detected — hold card in view';
-        detectedEl.textContent = '—';
-        // Expire current if too old
-        if (current && Date.now() - current.lastSeen > 2500) current = null;
-        return;
+ 
+      const quad = detectCardQuad();
+ 
+      if (quad) {
+        detectedQuad = quad;
+        detectionMode = 'quad';
+        const warped = warpQuadToFlat(quad);
+        extractNameStrip(warped);
+      } else {
+        detectedQuad = null;
+        detectionMode = 'fallback';
+        extractFallbackStrip();
       }
-
-      // Scale box back up to full video resolution
-      const cardBox = {
-        x0: smallBox.x0 / detectScale,
-        y0: smallBox.y0 / detectScale,
-        x1: smallBox.x1 / detectScale,
-        y1: smallBox.y1 / detectScale
-      };
-      detectedCardBox = cardBox;
-
-      // Extract name strip and OCR it
-      const { strip, stripBox } = extractNameStrip(frameCanvas, cardBox);
-      const { data } = await worker.recognize(strip);
-
-      // Look at all words from this strip
-      const words = (data.words || []).filter(w => w.confidence > 45);
+ 
+      const { data } = await worker.recognize(nameCanvas);
+      const words = (data.words || []).filter(w => w.confidence > 40);
+ 
       let best = null;
       for (const w of words) {
         if (!w.text) continue;
@@ -376,24 +1207,23 @@
           best = { match: m, word: w, conf: w.confidence };
         }
       }
-
+ 
       if (best) {
         if (!current || current.name !== best.match.name) {
-          statusEl.textContent = `Detected: ${best.match.name} ✓`;
+          statusEl.textContent = `✓ ${best.match.name}`;
           const img = await getSpriteFor(best.match.name);
-          current = { name: best.match.name, img, cardBox, stripBox, lastSeen: Date.now() };
+          current = { name: best.match.name, img, quad: detectedQuad, lastSeen: Date.now() };
         } else {
-          current.cardBox = cardBox;
-          current.stripBox = stripBox;
+          current.quad = detectedQuad;
           current.lastSeen = Date.now();
         }
-        detectedEl.textContent = `${best.match.name} (raw="${best.word.text}" conf=${Math.round(best.conf)} dist=${best.match.dist})`;
+        detectedEl.textContent = `${best.match.name} | raw="${best.word.text}" conf=${Math.round(best.conf)} | ${detectionMode}`;
       } else {
-        detectedEl.textContent = `card found, no name match (tried: ${words.slice(0,3).map(w=>w.text).join(', ')})`;
-        if (current) current.cardBox = cardBox;  // Still update position until expiry
+        detectedEl.textContent = `${detectionMode} | no match: ${words.slice(0,4).map(w=>w.text).join(', ')}`;
+        if (current) current.quad = detectedQuad;
       }
-
-      if (current && Date.now() - current.lastSeen > 3000) {
+ 
+      if (current && Date.now() - current.lastSeen > 3500) {
         current = null;
         statusEl.textContent = 'Searching…';
       }
@@ -403,14 +1233,12 @@
       ocrRunning = false;
     }
   }
-
-  // --- Render loop ---
+ 
   function renderLoop() {
     const w = overlay.clientWidth, h = overlay.clientHeight;
     ctx.clearRect(0, 0, w, h);
     if (!video.videoWidth) { requestAnimationFrame(renderLoop); return; }
-
-    // Compute video→screen transform (object-fit: cover)
+ 
     const vAspect = video.videoWidth / video.videoHeight;
     const dAspect = w / h;
     let dispW, dispH, offX, offY;
@@ -422,59 +1250,67 @@
       offX = 0; offY = (h - dispH) / 2;
     }
     const toScreen = (x, y) => ({ x: offX + x * (dispW / video.videoWidth), y: offY + y * (dispH / video.videoHeight) });
-
-    // Draw debug rectangle around detected card + name strip
-    if (detectedCardBox) {
-      const a = toScreen(detectedCardBox.x0, detectedCardBox.y0);
-      const b = toScreen(detectedCardBox.x1, detectedCardBox.y1);
+ 
+    // Draw the detected quad
+    if (detectedQuad) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(255,203,5,0.9)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
-      if (current && current.stripBox) {
-        const sa = toScreen(current.stripBox.x0, current.stripBox.y0);
-        const sb = toScreen(current.stripBox.x1, current.stripBox.y1);
-        ctx.strokeStyle = 'rgba(59,76,202,0.9)';
-        ctx.setLineDash([4, 4]);
-        ctx.strokeRect(sa.x, sa.y, sb.x - sa.x, sb.y - sa.y);
-        ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(255,203,5,0.95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      const p0 = toScreen(detectedQuad[0].x, detectedQuad[0].y);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < 4; i++) {
+        const p = toScreen(detectedQuad[i].x, detectedQuad[i].y);
+        ctx.lineTo(p.x, p.y);
       }
+      ctx.closePath();
+      ctx.stroke();
       ctx.restore();
     }
-
-    // Draw the Pokémon sprite on top of the card
-    if (current && current.img && current.cardBox) {
-      const a = toScreen(current.cardBox.x0, current.cardBox.y0);
-      const b = toScreen(current.cardBox.x1, current.cardBox.y1);
-      const cardW = b.x - a.x;
-      const cardH = b.y - a.y;
-      const cx = a.x + cardW / 2;
-      const topOfCard = a.y;
-
-      const spriteH = Math.max(120, cardH * 0.8);
+ 
+    // Draw the sprite
+    if (current && current.img) {
+      let anchorX, anchorY, spriteH;
+      if (current.quad) {
+        // Center horizontally on the top edge of the card
+        const tl = toScreen(current.quad[0].x, current.quad[0].y);
+        const tr = toScreen(current.quad[1].x, current.quad[1].y);
+        const bl = toScreen(current.quad[3].x, current.quad[3].y);
+        anchorX = (tl.x + tr.x) / 2;
+        anchorY = (tl.y + tr.y) / 2;
+        const cardScreenH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+        spriteH = Math.max(140, cardScreenH * 0.75);
+      } else {
+        // Fallback centering
+        anchorX = w / 2;
+        anchorY = h / 2;
+        spriteH = 200;
+      }
       const spriteW = spriteH;
-      const spriteX = cx - spriteW / 2;
-      const spriteY = topOfCard - spriteH - 6;
-
-      // Shadow ellipse on top edge of card
-      ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.beginPath();
-      ctx.ellipse(cx, topOfCard, spriteW * 0.32, 8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Idle bob
+      let spriteX = anchorX - spriteW / 2;
+      let spriteY = anchorY - spriteH - 8;
+      if (spriteY < 40) spriteY = anchorY + 8;  // flip below if no room
+ 
+      if (current.quad) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(anchorX, anchorY, spriteW * 0.3, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+ 
       const bob = Math.sin(Date.now() / 400) * 4;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(current.img, spriteX, spriteY + bob, spriteW, spriteH);
     }
-
+ 
     requestAnimationFrame(renderLoop);
   }
-
+ 
   startBtn.addEventListener('click', start);
 </script>
-
+ 
 </body>
 </html>
+ 
