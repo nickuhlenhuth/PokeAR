@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Pokémon Card AR (OCR v2)</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+                 font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #000; color: white; }
+
+    #stage { position: fixed; inset: 0; overflow: hidden; }
+    #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #video { object-fit: cover; background: #000; }
+    #overlay { pointer-events: none; }
+
+    /* Debug preview of the cropped name strip */
+    #debugStrip {
+      position: fixed; bottom: 12px; right: 12px; z-index: 30;
+      width: 160px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      background: rgba(0,0,0,0.5); display: none;
+    }
+    #debugStrip canvas { display: block; width: 100%; }
+    #debugStrip .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
+
+    #startGate {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #111; padding: 24px; text-align: center;
+    }
+    #startGate h1 { font-size: 24px; margin: 0 0 12px; }
+    #startGate p { font-size: 14px; line-height: 1.5; color: #bbb; max-width: 340px; margin: 0 0 20px; }
+    #startBtn {
+      padding: 16px 28px; font-size: 17px; font-weight: 700;
+      border: none; border-radius: 12px; background: #ffcb05; color: #1a1a1a;
+    }
+    #startBtn:disabled { opacity: 0.6; }
+
+    #status {
+      position: fixed; top: 12px; left: 12px; right: 12px; z-index: 20;
+      background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
+      font-size: 13px; text-align: center; backdrop-filter: blur(8px);
+    }
+    #detected {
+      position: fixed; bottom: 12px; left: 12px; z-index: 20;
+      background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
+      font-size: 12px; backdrop-filter: blur(8px);
+      font-family: ui-monospace, Menlo, monospace;
+      max-width: calc(100% - 200px);
+    }
+  </style>
+</head>
+<body>
+
+<div id="startGate">
+  <h1>🔮 Pokémon Card AR</h1>
+  <p>Hold a Pokémon card in front of the camera. The app finds the card, reads just the name area, and summons the Pokémon.</p>
+  <p style="font-size:12px;color:#888;">Tip: hold the card 6–12 inches from camera, filling most of the frame, well lit, reasonably flat.</p>
+  <button id="startBtn">Start Camera</button>
+</div>
+
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="debugStrip">
+  <div class="lbl">Name region (what OCR sees):</div>
+  <canvas id="debugCanvas"></canvas>
+</div>
+
+<div id="status" style="display:none;">Initializing…</div>
+<div id="detected" style="display:none;">—</div>
+
+<script>
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const ctx = overlay.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const startGate = document.getElementById('startGate');
+  const statusEl = document.getElementById('status');
+  const detectedEl = document.getElementById('detected');
+  const debugStrip = document.getElementById('debugStrip');
+  const debugCanvas = document.getElementById('debugCanvas');
+  const debugCtx = debugCanvas.getContext('2d');
+
+  // Hidden canvases for processing
+  const frameCanvas = document.createElement('canvas');
+  const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
+  const nameCanvas = document.createElement('canvas');
+  const nameCtx = nameCanvas.getContext('2d');
+
+  let worker = null;
+  let current = null;   // { name, img, cardBox, nameBox, lastSeen }
+  let spriteCache = {};
+  let pokemonNameSet = null;
+  let ocrRunning = false;
+  let detectedCardBox = null;  // Last detected card rectangle in video coords
+
+  // --- Fetch Pokemon names for matching ---
+  async function loadPokemonList() {
+    const res = await fetch('https://pokeapi.co/api/v2/pokemon?limit=2000');
+    const data = await res.json();
+    pokemonNameSet = new Set(data.results.map(p => p.name.toLowerCase()));
+  }
+
+  function editDistance(a, b) {
+    const m = a.length, n = b.length;
+    if (!m) return n; if (!n) return m;
+    const dp = Array.from({length: m+1}, (_,i)=>[i]);
+    for (let j=1;j<=n;j++) dp[0][j]=j;
+    for (let i=1;i<=m;i++) for (let j=1;j<=n;j++) {
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1]
+              : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+    return dp[m][n];
+  }
+
+  function findBestMatch(raw) {
+    if (!pokemonNameSet) return null;
+    const cleaned = raw.toLowerCase().replace(/[^a-z]/g, '');
+    if (cleaned.length < 4) return null;  // require at least 4 chars - skips "ex", "v", etc.
+
+    if (pokemonNameSet.has(cleaned)) return { name: cleaned, dist: 0 };
+
+    let best = null, bestDist = Infinity;
+    const maxDist = Math.max(1, Math.floor(cleaned.length * 0.25));
+    for (const name of pokemonNameSet) {
+      if (Math.abs(name.length - cleaned.length) > maxDist) continue;
+      const d = editDistance(cleaned, name);
+      if (d < bestDist) { bestDist = d; best = name; if (d === 0) break; }
+    }
+    return bestDist <= maxDist ? { name: best, dist: bestDist } : null;
+  }
+
+  async function getSpriteFor(name) {
+    if (spriteCache[name]) return spriteCache[name];
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { spriteCache[name] = img; resolve(img); };
+      img.onerror = async () => {
+        try {
+          const r = await fetch(`https://pokeapi.co/api/v2/pokemon/${name}`);
+          const d = await r.json();
+          const fb = new Image();
+          fb.crossOrigin = 'anonymous';
+          fb.onload = () => { spriteCache[name] = fb; resolve(fb); };
+          fb.onerror = () => resolve(null);
+          fb.src = d.sprites.front_default;
+        } catch { resolve(null); }
+      };
+      img.src = `https://play.pokemonshowdown.com/sprites/ani/${name}.gif`;
+    });
+  }
+
+  // --- CARD DETECTION ---
+  // Strategy: find the largest bright-ish rectangular region.
+  // Pokemon cards have a yellow border which is reliably brighter than typical backgrounds.
+  // We threshold for "not too dark" pixels, find the largest connected component,
+  // and take its bounding box as the card.
+  function detectCardBox(imgData) {
+    const { data, width, height } = imgData;
+    // Binary mask: bright enough = card candidate
+    const mask = new Uint8Array(width * height);
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const luma = 0.299*r + 0.587*g + 0.114*b;
+      mask[p] = luma > 90 ? 1 : 0;
+    }
+
+    // Flood-fill to find largest connected bright region
+    const visited = new Uint8Array(width * height);
+    let bestArea = 0, bestBox = null;
+    const step = 4;  // subsample seed points for speed
+    const stack = [];
+    for (let sy = 0; sy < height; sy += step) {
+      for (let sx = 0; sx < width; sx += step) {
+        const idx = sy * width + sx;
+        if (!mask[idx] || visited[idx]) continue;
+        stack.length = 0;
+        stack.push(idx);
+        let area = 0, minX = sx, minY = sy, maxX = sx, maxY = sy;
+        while (stack.length) {
+          const p = stack.pop();
+          if (visited[p] || !mask[p]) continue;
+          visited[p] = 1;
+          area++;
+          const x = p % width, y = (p - x) / width;
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+          if (x > 0) stack.push(p - 1);
+          if (x < width - 1) stack.push(p + 1);
+          if (y > 0) stack.push(p - width);
+          if (y < height - 1) stack.push(p + width);
+        }
+        if (area > bestArea) {
+          bestArea = area;
+          bestBox = { x0: minX, y0: minY, x1: maxX, y1: maxY, area };
+        }
+      }
+    }
+
+    if (!bestBox) return null;
+
+    const bw = bestBox.x1 - bestBox.x0;
+    const bh = bestBox.y1 - bestBox.y0;
+    const totalArea = width * height;
+
+    // Sanity checks: must be a reasonable fraction of the frame and roughly card-shaped
+    if (bestBox.area < totalArea * 0.08) return null;
+    if (bw < 40 || bh < 60) return null;
+
+    // Pokemon cards are ~0.716 aspect (w/h). Allow some rotation/perspective, so 0.45-1.2.
+    // If the card is held sideways the ratio flips.
+    const ratio = bw / bh;
+    if (ratio < 0.35 || ratio > 2.2) return null;
+
+    // Fill ratio — bright area should occupy most of the bounding box (i.e., it's roughly
+    // rectangular, not some jagged shape)
+    const fill = bestBox.area / (bw * bh);
+    if (fill < 0.55) return null;
+
+    return bestBox;
+  }
+
+  // --- Extract the name strip from the detected card ---
+  // For a portrait-oriented Pokemon card, the name is in the top ~13% of the card height,
+  // and roughly the left 65% of the width (HP + energy symbol are on the right).
+  function extractNameStrip(videoFrameCanvas, cardBox) {
+    const bw = cardBox.x1 - cardBox.x0;
+    const bh = cardBox.y1 - cardBox.y0;
+
+    // Detect orientation: portrait (typical) vs landscape (card held sideways)
+    const portrait = bh >= bw;
+
+    let stripX, stripY, stripW, stripH;
+    if (portrait) {
+      // Top ~17% of card, left 70% of width (skip HP)
+      stripX = cardBox.x0 + bw * 0.05;
+      stripY = cardBox.y0 + bh * 0.04;
+      stripW = bw * 0.65;
+      stripH = bh * 0.13;
+    } else {
+      // Landscape held - name on left edge, vertical. Fall back to top-left chunk.
+      stripX = cardBox.x0 + bw * 0.04;
+      stripY = cardBox.y0 + bh * 0.05;
+      stripW = bw * 0.13;
+      stripH = bh * 0.65;
+    }
+
+    // Upscale the strip to 3x for better OCR accuracy
+    const upscale = 3;
+    nameCanvas.width = stripW * upscale;
+    nameCanvas.height = stripH * upscale;
+    nameCtx.imageSmoothingEnabled = true;
+    nameCtx.imageSmoothingQuality = 'high';
+    nameCtx.drawImage(videoFrameCanvas, stripX, stripY, stripW, stripH, 0, 0, nameCanvas.width, nameCanvas.height);
+
+    // Boost contrast — helps OCR a lot
+    const imgData = nameCtx.getImageData(0, 0, nameCanvas.width, nameCanvas.height);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // Luma
+      const l = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      // S-curve: darken darks, brighten lights
+      const boosted = l < 128 ? Math.max(0, l - 20) : Math.min(255, l + 20);
+      d[i] = d[i+1] = d[i+2] = boosted;
+    }
+    nameCtx.putImageData(imgData, 0, 0);
+
+    // Show in debug preview
+    debugCanvas.width = nameCanvas.width;
+    debugCanvas.height = nameCanvas.height;
+    debugCtx.drawImage(nameCanvas, 0, 0);
+
+    return { strip: nameCanvas, stripBox: { x0: stripX, y0: stripY, x1: stripX + stripW, y1: stripY + stripH } };
+  }
+
+  // --- Start ---
+  async function start() {
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting…';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+
+      startGate.style.display = 'none';
+      statusEl.style.display = 'block';
+      detectedEl.style.display = 'block';
+      debugStrip.style.display = 'block';
+
+      statusEl.textContent = 'Loading OCR (first time ~5s)…';
+      await loadPokemonList();
+
+      worker = await Tesseract.createWorker('eng');
+      await worker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
+      });
+
+      statusEl.textContent = 'Show me a Pokémon card 🎯';
+      resizeOverlay();
+      window.addEventListener('resize', resizeOverlay);
+      requestAnimationFrame(renderLoop);
+      setInterval(processFrame, 600);
+    } catch (e) {
+      alert('Failed: ' + e.message);
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start Camera';
+    }
+  }
+
+  function resizeOverlay() {
+    overlay.width = overlay.clientWidth * window.devicePixelRatio;
+    overlay.height = overlay.clientHeight * window.devicePixelRatio;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  }
+
+  // --- Main processing: detect card, crop name strip, OCR it ---
+  async function processFrame() {
+    if (ocrRunning || !worker || !video.videoWidth) return;
+    ocrRunning = true;
+    try {
+      // Use lower-res frame for card detection (fast)
+      const detectScale = 0.35;
+      frameCanvas.width = video.videoWidth;
+      frameCanvas.height = video.videoHeight;
+      frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+
+      // Downscaled copy for detection
+      const detCanvas = document.createElement('canvas');
+      detCanvas.width = video.videoWidth * detectScale;
+      detCanvas.height = video.videoHeight * detectScale;
+      const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
+      detCtx.drawImage(video, 0, 0, detCanvas.width, detCanvas.height);
+      const imgData = detCtx.getImageData(0, 0, detCanvas.width, detCanvas.height);
+
+      const smallBox = detectCardBox(imgData);
+      if (!smallBox) {
+        detectedCardBox = null;
+        statusEl.textContent = 'No card detected — hold card in view';
+        detectedEl.textContent = '—';
+        // Expire current if too old
+        if (current && Date.now() - current.lastSeen > 2500) current = null;
+        return;
+      }
+
+      // Scale box back up to full video resolution
+      const cardBox = {
+        x0: smallBox.x0 / detectScale,
+        y0: smallBox.y0 / detectScale,
+        x1: smallBox.x1 / detectScale,
+        y1: smallBox.y1 / detectScale
+      };
+      detectedCardBox = cardBox;
+
+      // Extract name strip and OCR it
+      const { strip, stripBox } = extractNameStrip(frameCanvas, cardBox);
+      const { data } = await worker.recognize(strip);
+
+      // Look at all words from this strip
+      const words = (data.words || []).filter(w => w.confidence > 45);
+      let best = null;
+      for (const w of words) {
+        if (!w.text) continue;
+        const m = findBestMatch(w.text);
+        if (m && (!best || m.dist < best.match.dist || (m.dist === best.match.dist && w.confidence > best.conf))) {
+          best = { match: m, word: w, conf: w.confidence };
+        }
+      }
+
+      if (best) {
+        if (!current || current.name !== best.match.name) {
+          statusEl.textContent = `Detected: ${best.match.name} ✓`;
+          const img = await getSpriteFor(best.match.name);
+          current = { name: best.match.name, img, cardBox, stripBox, lastSeen: Date.now() };
+        } else {
+          current.cardBox = cardBox;
+          current.stripBox = stripBox;
+          current.lastSeen = Date.now();
+        }
+        detectedEl.textContent = `${best.match.name} (raw="${best.word.text}" conf=${Math.round(best.conf)} dist=${best.match.dist})`;
+      } else {
+        detectedEl.textContent = `card found, no name match (tried: ${words.slice(0,3).map(w=>w.text).join(', ')})`;
+        if (current) current.cardBox = cardBox;  // Still update position until expiry
+      }
+
+      if (current && Date.now() - current.lastSeen > 3000) {
+        current = null;
+        statusEl.textContent = 'Searching…';
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      ocrRunning = false;
+    }
+  }
+
+  // --- Render loop ---
+  function renderLoop() {
+    const w = overlay.clientWidth, h = overlay.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    if (!video.videoWidth) { requestAnimationFrame(renderLoop); return; }
+
+    // Compute video→screen transform (object-fit: cover)
+    const vAspect = video.videoWidth / video.videoHeight;
+    const dAspect = w / h;
+    let dispW, dispH, offX, offY;
+    if (vAspect > dAspect) {
+      dispH = h; dispW = dispH * vAspect;
+      offX = (w - dispW) / 2; offY = 0;
+    } else {
+      dispW = w; dispH = dispW / vAspect;
+      offX = 0; offY = (h - dispH) / 2;
+    }
+    const toScreen = (x, y) => ({ x: offX + x * (dispW / video.videoWidth), y: offY + y * (dispH / video.videoHeight) });
+
+    // Draw debug rectangle around detected card + name strip
+    if (detectedCardBox) {
+      const a = toScreen(detectedCardBox.x0, detectedCardBox.y0);
+      const b = toScreen(detectedCardBox.x1, detectedCardBox.y1);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,203,5,0.9)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      if (current && current.stripBox) {
+        const sa = toScreen(current.stripBox.x0, current.stripBox.y0);
+        const sb = toScreen(current.stripBox.x1, current.stripBox.y1);
+        ctx.strokeStyle = 'rgba(59,76,202,0.9)';
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(sa.x, sa.y, sb.x - sa.x, sb.y - sa.y);
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    // Draw the Pokémon sprite on top of the card
+    if (current && current.img && current.cardBox) {
+      const a = toScreen(current.cardBox.x0, current.cardBox.y0);
+      const b = toScreen(current.cardBox.x1, current.cardBox.y1);
+      const cardW = b.x - a.x;
+      const cardH = b.y - a.y;
+      const cx = a.x + cardW / 2;
+      const topOfCard = a.y;
+
+      const spriteH = Math.max(120, cardH * 0.8);
+      const spriteW = spriteH;
+      const spriteX = cx - spriteW / 2;
+      const spriteY = topOfCard - spriteH - 6;
+
+      // Shadow ellipse on top edge of card
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.beginPath();
+      ctx.ellipse(cx, topOfCard, spriteW * 0.32, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Idle bob
+      const bob = Math.sin(Date.now() / 400) * 4;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(current.img, spriteX, spriteY + bob, spriteW, spriteH);
+    }
+
+    requestAnimationFrame(renderLoop);
+  }
+
+  startBtn.addEventListener('click', start);
+</script>
+
+</body>
+</html>
