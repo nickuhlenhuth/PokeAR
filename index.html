@@ -3,10 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Pokémon Card AR v11</title>
-
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
+  <title>PokeBattle — Battlefield</title>
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -14,489 +11,146 @@
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       background: #000; color: white;
     }
-    #stage { position: fixed; inset: 0; overflow: hidden; }
-    #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
-    #video { object-fit: cover; background: #000; }
-    #overlay { pointer-events: none; }
 
-    #sprite {
+    #battlefield {
+      position: fixed; inset: 0;
+      background-image: url('battlefield.png');
+      background-size: cover;
+      background-position: center;
+      background-color: #000;
+    }
+
+    /* Sprite slot placeholders. Sprites land here in later phases. */
+    .slot {
       position: absolute;
+      bottom: 22%;
+      height: 28vh;
+      width: 1px;
+    }
+    #slot1 { left: 30%; }
+    #slot2 { right: 30%; }
+
+    .slot-status {
+      position: absolute;
+      bottom: 50%;
+      transform: translate(-50%, 0);
+      background: rgba(0, 0, 0, 0.65);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      backdrop-filter: blur(8px);
+      white-space: nowrap;
+      color: #ddd;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transition: background 0.2s, color 0.2s;
+    }
+    #slot1-status { left: 30%; }
+    #slot2-status { left: 70%; }
+    .slot-status.filled {
+      background: rgba(20, 150, 60, 0.75);
+      color: white;
+      border-color: rgba(120, 255, 150, 0.4);
+    }
+
+    #qr-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 30;
+      background: white;
+      color: #111;
+      padding: 16px;
+      border-radius: 14px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+      text-align: center;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #qr-panel.hidden {
+      opacity: 0;
+      transform: translateY(-10px);
       pointer-events: none;
-      display: none;
-      image-rendering: pixelated;
-      image-rendering: -moz-crisp-edges;
-      image-rendering: crisp-edges;
-      transition: none;
-      filter: drop-shadow(0 6px 8px rgba(0,0,0,0.5));
     }
-
-    #debugPanel {
-      position: fixed; bottom: 12px; right: 12px; z-index: 30;
-      width: 200px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
-      background: rgba(0,0,0,0.65); display: none;
+    #qr-panel .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #666;
+      margin-bottom: 6px;
     }
-    #debugPanel canvas { display: block; width: 100%; margin-bottom: 2px; }
-    #debugPanel .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
-
-    #startGate {
-      position: fixed; inset: 0; z-index: 100;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: #111; padding: 24px; text-align: center;
+    #qr-code {
+      width: 200px;
+      height: 200px;
+      margin: 0 auto;
     }
-    #startGate h1 { font-size: 26px; margin: 0 0 12px; }
-    #startGate p { font-size: 14px; line-height: 1.5; color: #bbb; max-width: 340px; margin: 0 0 20px; }
-    #startBtn {
-      padding: 16px 32px; font-size: 17px; font-weight: 700;
-      border: none; border-radius: 12px; background: #ffcb05; color: #1a1a1a;
-    }
-    #startBtn:disabled { opacity: 0.6; }
-
-    #status {
-      position: fixed; top: 12px; left: 12px; right: 12px; z-index: 20;
-      background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
-      font-size: 13px; text-align: center; backdrop-filter: blur(8px);
-    }
-    #detected {
-      position: fixed; bottom: 12px; left: 12px; z-index: 20;
-      background: rgba(0,0,0,0.65); padding: 8px 12px; border-radius: 10px;
-      font-size: 10px; backdrop-filter: blur(8px);
+    #qr-code img, #qr-code canvas { display: block; margin: 0 auto; }
+    #room-code {
+      margin-top: 10px;
       font-family: ui-monospace, Menlo, monospace;
-      max-width: calc(100% - 230px);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 2px;
     }
+
+    #setup-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(10, 10, 15, 0.96);
+      display: none;
+      align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    #setup-overlay.active { display: flex; }
+    #setup-overlay .box {
+      max-width: 520px;
+      background: #1a1a22;
+      border: 1px solid #333;
+      border-radius: 14px;
+      padding: 28px;
+      line-height: 1.55;
+    }
+    #setup-overlay h2 { margin: 0 0 12px; font-size: 20px; }
+    #setup-overlay p, #setup-overlay li { font-size: 14px; color: #ccc; }
+    #setup-overlay code {
+      font-family: ui-monospace, Menlo, monospace;
+      background: #2a2a35; padding: 2px 6px; border-radius: 4px; font-size: 12px;
+    }
+    #setup-overlay ol { padding-left: 20px; }
+    #setup-overlay ol li { margin-bottom: 8px; }
   </style>
 </head>
 <body>
 
-<div id="startGate">
-  <h1>🔮 Pokémon Card AR</h1>
-  <p>Align your card inside the frame. Hold steady.</p>
-  <button id="startBtn">Start Camera</button>
+<div id="battlefield">
+  <div id="slot1" class="slot"></div>
+  <div id="slot2" class="slot"></div>
 </div>
 
-<div id="stage">
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="overlay"></canvas>
-  <img id="sprite" alt="" />
+<div id="slot1-status" class="slot-status">Waiting for Player 1…</div>
+<div id="slot2-status" class="slot-status">Waiting for Player 2…</div>
+
+<div id="qr-panel">
+  <div class="label">Scan to join</div>
+  <div id="qr-code"></div>
+  <div id="room-code">------</div>
 </div>
 
-<div id="debugPanel">
-  <div class="lbl">Variant A (adaptive):</div>
-  <canvas id="debugA"></canvas>
-  <div class="lbl">Variant B (adaptive inv):</div>
-  <canvas id="debugB"></canvas>
+<div id="setup-overlay">
+  <div class="box">
+    <h2>Supabase not configured</h2>
+    <p>Phase 2 needs a Supabase project for realtime sync. Set it up once:</p>
+    <ol>
+      <li>Go to <code>supabase.com</code>, sign in, and create a new project (free tier is fine).</li>
+      <li>From <code>Project Settings → API</code>, copy the <strong>Project URL</strong> and <strong>anon public</strong> key.</li>
+      <li>Open <code>shared.js</code> and replace the placeholder values of <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code>.</li>
+      <li>Reload this page.</li>
+    </ol>
+    <p style="margin-top:14px;color:#888;font-size:12px;">The anon key is public by design — safe to commit.</p>
+  </div>
 </div>
 
-<div id="status" style="display:none;">Initializing…</div>
-<div id="detected" style="display:none;">—</div>
-
-<script>
-  const video = document.getElementById('video');
-  const overlay = document.getElementById('overlay');
-  const ctx = overlay.getContext('2d');
-  const startBtn = document.getElementById('startBtn');
-  const startGate = document.getElementById('startGate');
-  const statusEl = document.getElementById('status');
-  const detectedEl = document.getElementById('detected');
-  const debugPanel = document.getElementById('debugPanel');
-  const debugA = document.getElementById('debugA');
-  const debugB = document.getElementById('debugB');
-  const spriteEl = document.getElementById('sprite');
-
-  const nameCanvas = document.createElement('canvas');
-  const nameCtx = nameCanvas.getContext('2d');
-
-  let worker = null;
-  let current = null;
-  let spriteCache = {};
-  let pokemonNameSet = null;
-  let pokemonNames = [];
-  let pokemonNamesByLen = new Map();  // length -> array of names
-  let ocrRunning = false;
-  let pulsePhase = 0;
-
-  async function loadPokemonList() {
-    const res = await fetch('https://pokeapi.co/api/v2/pokemon?limit=2000');
-    const data = await res.json();
-    pokemonNames = data.results.map(p => p.name.toLowerCase());
-    pokemonNameSet = new Set(pokemonNames);
-    // Index by length for faster fuzzy lookup
-    for (const n of pokemonNames) {
-      if (!pokemonNamesByLen.has(n.length)) pokemonNamesByLen.set(n.length, []);
-      pokemonNamesByLen.get(n.length).push(n);
-    }
-  }
-
-  function editDistance(a, b, maxAllowed) {
-    const m = a.length, n = b.length;
-    if (!m) return n; if (!n) return m;
-    if (Math.abs(m - n) > maxAllowed) return maxAllowed + 1;
-    const dp = Array.from({length: m+1}, (_,i)=>[i]);
-    for (let j=1;j<=n;j++) dp[0][j]=j;
-    for (let i=1;i<=m;i++) {
-      let rowMin = Infinity;
-      for (let j=1;j<=n;j++) {
-        dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1]
-                : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
-        if (dp[i][j] < rowMin) rowMin = dp[i][j];
-      }
-      // Early exit: if entire row already exceeds max, no improvement possible
-      if (rowMin > maxAllowed) return maxAllowed + 1;
-    }
-    return dp[m][n];
-  }
-
-  // Strict: only match a single clean word (letters only, already lowercased) against
-  // the Pokemon name list. Returns null if not a confident match.
-  //
-  // Rules:
-  //   - Token must be >= 5 chars (short "names" produce too many false positives;
-  //     the only <5-char Pokemon names like "abra", "onix" must match EXACTLY — handled separately)
-  //   - Exact match: allowed at any length >= 4
-  //   - Fuzzy match: allowed only for length >= 6, and edit distance <= floor(len/5)
-  //     i.e. 6-9 char names → dist 1; 10-14 → dist 2; 15+ → dist 3. Very strict.
-  function matchWord(word) {
-    if (!pokemonNameSet) return null;
-    if (word.length < 4) return null;
-
-    // Try exact match first, at any length >= 4
-    if (pokemonNameSet.has(word)) {
-      return { name: word, dist: 0, score: word.length * 2 };  // exact matches strongly preferred
-    }
-
-    // Fuzzy matching: only for longer words, and only with small edit distance
-    if (word.length < 6) return null;
-    const maxDist = Math.floor(word.length / 5);
-    if (maxDist < 1) return null;
-
-    let best = null, bestDist = Infinity;
-    // Check names within [len - maxDist, len + maxDist]
-    for (let L = word.length - maxDist; L <= word.length + maxDist; L++) {
-      const bucket = pokemonNamesByLen.get(L);
-      if (!bucket) continue;
-      for (const name of bucket) {
-        const d = editDistance(word, name, maxDist);
-        if (d < bestDist) { bestDist = d; best = name; if (d === 0) break; }
-      }
-      if (bestDist === 0) break;
-    }
-    if (bestDist > maxDist) return null;
-    // Score: prefer longer names with fewer edits
-    const score = best.length * 2 - bestDist * 3;
-    return { name: best, dist: bestDist, score };
-  }
-
-  // Extract continuous runs of letters from raw OCR text, test each as a standalone word.
-  // No joining, no substring search. Just: what words did OCR see?
-  function findBestMatchInText(text) {
-    if (!text) return null;
-    // Split on anything that isn't a letter. This handles spaces, punctuation, digits, HP marker, etc.
-    const words = text.toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    let best = null;
-    for (const w of words) {
-      const m = matchWord(w);
-      if (m && (!best || m.score > best.score)) best = m;
-    }
-    return best;
-  }
-
-  async function getSpriteFor(name) {
-    if (spriteCache[name] !== undefined) return spriteCache[name];
-    try {
-      const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${name}`);
-      if (!res.ok) { spriteCache[name] = null; return null; }
-      const data = await res.json();
-      // Prefer the animated Showdown sprite; fall back to static front_default if unavailable
-      const spriteUrl = data.sprites?.other?.showdown?.front_default
-                     || data.sprites?.front_default
-                     || null;
-      spriteCache[name] = spriteUrl;
-      return spriteUrl;
-    } catch {
-      spriteCache[name] = null;
-      return null;
-    }
-  }
-
-  function getTargetBox() {
-    const W = overlay.clientWidth, H = overlay.clientHeight;
-    const cardH = Math.min(H * 0.65, W * 0.65 / 0.716);
-    const cardW = cardH * 0.716;
-    return { x: W/2 - cardW/2, y: H/2 - cardH/2, w: cardW, h: cardH };
-  }
-
-  function screenRectToVideo(rect) {
-    const W = overlay.clientWidth, H = overlay.clientHeight;
-    const vAspect = video.videoWidth / video.videoHeight;
-    const dAspect = W / H;
-    let dispW, dispH, offX, offY;
-    if (vAspect > dAspect) {
-      dispH = H; dispW = dispH * vAspect;
-      offX = (W - dispW) / 2; offY = 0;
-    } else {
-      dispW = W; dispH = dispW / vAspect;
-      offX = 0; offY = (H - dispH) / 2;
-    }
-    const sx = video.videoWidth / dispW, sy = video.videoHeight / dispH;
-    return { x: (rect.x - offX) * sx, y: (rect.y - offY) * sy, w: rect.w * sx, h: rect.h * sy };
-  }
-
-  async function start() {
-    startBtn.disabled = true;
-    startBtn.textContent = 'Starting…';
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false
-      });
-      video.srcObject = stream;
-      await video.play();
-
-      startGate.style.display = 'none';
-      statusEl.style.display = 'block';
-      detectedEl.style.display = 'block';
-      debugPanel.style.display = 'block';
-
-      statusEl.textContent = 'Loading OCR…';
-      await loadPokemonList();
-
-      worker = await Tesseract.createWorker('eng');
-      await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz \'',
-        tessedit_pageseg_mode: '7'
-      });
-
-      statusEl.textContent = 'Align card with the frame 🎯';
-      resizeOverlay();
-      window.addEventListener('resize', resizeOverlay);
-      requestAnimationFrame(renderLoop);
-      setInterval(runOCR, 500);
-    } catch (e) {
-      alert('Failed: ' + e.message);
-      startBtn.disabled = false;
-      startBtn.textContent = 'Start Camera';
-    }
-  }
-
-  function resizeOverlay() {
-    overlay.width = overlay.clientWidth * window.devicePixelRatio;
-    overlay.height = overlay.clientHeight * window.devicePixelRatio;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  }
-
-  function toGray(srcCanvas) {
-    const w = srcCanvas.width, h = srcCanvas.height;
-    const tmp = document.createElement('canvas');
-    tmp.width = w; tmp.height = h;
-    tmp.getContext('2d').drawImage(srcCanvas, 0, 0);
-    const imgData = tmp.getContext('2d').getImageData(0, 0, w, h);
-    const d = imgData.data;
-    const gray = new Uint8Array(w * h);
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      gray[j] = Math.round(0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]);
-    }
-    return { gray, w, h };
-  }
-
-  function adaptiveThreshold(gray, w, h, windowSize, C, invert) {
-    const integral = new Float64Array((w+1) * (h+1));
-    for (let y = 1; y <= h; y++) {
-      let rowSum = 0;
-      for (let x = 1; x <= w; x++) {
-        rowSum += gray[(y-1)*w + (x-1)];
-        integral[y*(w+1) + x] = integral[(y-1)*(w+1) + x] + rowSum;
-      }
-    }
-    const half = Math.floor(windowSize / 2);
-    const out = new Uint8Array(w * h);
-    for (let y = 0; y < h; y++) {
-      const y1 = Math.max(0, y - half);
-      const y2 = Math.min(h - 1, y + half);
-      for (let x = 0; x < w; x++) {
-        const x1 = Math.max(0, x - half);
-        const x2 = Math.min(w - 1, x + half);
-        const area = (x2 - x1 + 1) * (y2 - y1 + 1);
-        const sum = integral[(y2+1)*(w+1) + (x2+1)]
-                  - integral[(y1)*(w+1) + (x2+1)]
-                  - integral[(y2+1)*(w+1) + (x1)]
-                  + integral[y1*(w+1) + x1];
-        const mean = sum / area;
-        const isFg = gray[y*w + x] < mean - C;
-        out[y*w + x] = (invert ? !isFg : isFg) ? 0 : 255;
-      }
-    }
-    return out;
-  }
-
-  function writeMaskToCanvas(mask, w, h, outCanvas) {
-    outCanvas.width = w; outCanvas.height = h;
-    const octx = outCanvas.getContext('2d');
-    const imgData = octx.createImageData(w, h);
-    const d = imgData.data;
-    for (let i = 0, j = 0; i < mask.length; i++, j += 4) {
-      d[j] = d[j+1] = d[j+2] = mask[i];
-      d[j+3] = 255;
-    }
-    octx.putImageData(imgData, 0, 0);
-  }
-
-  async function runOCR() {
-    if (ocrRunning || !worker || !video.videoWidth) return;
-    ocrRunning = true;
-    try {
-      const targetScreen = getTargetBox();
-      const targetVideo = screenRectToVideo(targetScreen);
-      const vx = Math.max(0, targetVideo.x);
-      const vy = Math.max(0, targetVideo.y);
-      const vw = Math.min(video.videoWidth - vx, targetVideo.w);
-      const vh = Math.min(video.videoHeight - vy, targetVideo.h);
-      if (vw < 50 || vh < 50) { ocrRunning = false; return; }
-
-      // Name band = top ~14% of card
-      const nameX = vx + vw * 0.03;
-      const nameY = vy + vh * 0.03;
-      const nameW = vw * 0.94;
-      const nameH = vh * 0.14;
-
-      const upscale = 3;
-      nameCanvas.width = Math.floor(nameW * upscale);
-      nameCanvas.height = Math.floor(nameH * upscale);
-      nameCtx.imageSmoothingEnabled = true;
-      nameCtx.imageSmoothingQuality = 'high';
-      nameCtx.drawImage(video, nameX, nameY, nameW, nameH, 0, 0, nameCanvas.width, nameCanvas.height);
-
-      const { gray, w, h } = toGray(nameCanvas);
-
-      let win = Math.floor(Math.min(w, h) / 4);
-      if (win % 2 === 0) win++;
-      if (win < 15) win = 15;
-
-      const maskA = adaptiveThreshold(gray, w, h, win, 10, false);
-      const maskB = adaptiveThreshold(gray, w, h, win, 10, true);
-
-      writeMaskToCanvas(maskA, w, h, debugA);
-      writeMaskToCanvas(maskB, w, h, debugB);
-
-      let best = null;
-      const reads = [];
-      for (const [label, canvas] of [['A', debugA], ['B', debugB]]) {
-        const { data } = await worker.recognize(canvas);
-        const text = (data.text || '').trim().replace(/\n+/g, ' ');
-        reads.push(`${label}:${text || '∅'}`);
-        const m = findBestMatchInText(text);
-        if (m && (!best || m.score > best.match.score)) {
-          best = { match: m, raw: text, variant: label };
-        }
-      }
-
-      if (best) {
-        if (!current || current.name !== best.match.name) {
-          statusEl.textContent = `✓ ${best.match.name}`;
-          const url = await getSpriteFor(best.match.name);
-          current = { name: best.match.name, url };
-          if (url) {
-            spriteEl.src = url;
-            spriteEl.style.display = 'block';
-          } else {
-            spriteEl.style.display = 'none';
-          }
-        }
-        detectedEl.textContent = `${best.match.name} [${best.variant}] d=${best.match.dist} | ${reads.join(' ')}`;
-      } else {
-        detectedEl.textContent = reads.join(' | ');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      ocrRunning = false;
-    }
-  }
-
-  function renderLoop() {
-    const W = overlay.clientWidth, H = overlay.clientHeight;
-    ctx.clearRect(0, 0, W, H);
-    if (!video.videoWidth) { requestAnimationFrame(renderLoop); return; }
-
-    pulsePhase += 0.05;
-    const target = getTargetBox();
-    const isLocked = !!current;
-    const outlineColor = isLocked ? 'rgba(102, 255, 153, 0.95)' : 'rgba(255, 203, 5, 0.95)';
-    const glow = 0.5 + 0.5 * Math.sin(pulsePhase);
-
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(0, 0, W, target.y);
-    ctx.fillRect(0, target.y + target.h, W, H - (target.y + target.h));
-    ctx.fillRect(0, target.y, target.x, target.h);
-    ctx.fillRect(target.x + target.w, target.y, W - (target.x + target.w), target.h);
-    ctx.restore();
-
-    drawCornerBrackets(target, outlineColor, isLocked ? 4 : 3);
-
-    const nameBand = {
-      x: target.x + target.w * 0.03,
-      y: target.y + target.h * 0.03,
-      w: target.w * 0.94,
-      h: target.h * 0.14
-    };
-    ctx.save();
-    ctx.strokeStyle = `rgba(59,130,246, ${0.6 + 0.3 * glow})`;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(nameBand.x, nameBand.y, nameBand.w, nameBand.h);
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(59,130,246,0.9)';
-    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.fillText('name', nameBand.x + 2, nameBand.y - 3);
-    ctx.restore();
-
-    if (current && current.url) {
-      const anchorX = target.x + target.w / 2;
-      const anchorY = target.y;
-      const cardScreenH = target.h;
-      const spriteH = Math.max(140, cardScreenH * 0.7);
-      const spriteW = spriteH;
-      let spriteX = anchorX - spriteW / 2;
-      let spriteY = anchorY - spriteH - 8;
-      if (spriteY < 60) spriteY = anchorY + 8;
-      const bob = Math.sin(Date.now() / 400) * 4;
-
-      // Shadow on canvas (underneath the DOM sprite img)
-      ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.beginPath();
-      ctx.ellipse(anchorX, anchorY, spriteW * 0.3, 8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Position the DOM <img> so the GIF animates natively
-      spriteEl.style.left = spriteX + 'px';
-      spriteEl.style.top = (spriteY + bob) + 'px';
-      spriteEl.style.width = spriteW + 'px';
-      spriteEl.style.height = spriteH + 'px';
-    } else {
-      spriteEl.style.display = 'none';
-    }
-
-    requestAnimationFrame(renderLoop);
-  }
-
-  function drawCornerBrackets(rect, color, lineWidth) {
-    const L = Math.min(rect.w, rect.h) * 0.12;
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.setLineDash([]);
-    ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(rect.x, rect.y + L); ctx.lineTo(rect.x, rect.y); ctx.lineTo(rect.x + L, rect.y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(rect.x + rect.w - L, rect.y); ctx.lineTo(rect.x + rect.w, rect.y); ctx.lineTo(rect.x + rect.w, rect.y + L); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(rect.x + rect.w, rect.y + rect.h - L); ctx.lineTo(rect.x + rect.w, rect.y + rect.h); ctx.lineTo(rect.x + rect.w - L, rect.y + rect.h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(rect.x + L, rect.y + rect.h); ctx.lineTo(rect.x, rect.y + rect.h); ctx.lineTo(rect.x, rect.y + rect.h - L); ctx.stroke();
-    ctx.restore();
-  }
-
-  startBtn.addEventListener('click', start);
-</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="shared.js"></script>
+<script src="battlefield.js"></script>
 
 </body>
 </html>
