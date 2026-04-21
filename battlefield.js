@@ -69,11 +69,16 @@ function handlePlayerStateBroadcast({ payload }) {
   // Active Pokemon changed (or first set)
   const prevName = prev?.active?.name || null;
   const newName = newState.active?.name || null;
+  const prevHP = prev?.active?.hp;
+  const newHP = newState.active?.hp;
   if (newName && prevName !== newName) {
     queueSlotUpdate(player, newName);
   } else if (!newName && prevName) {
     // Active cleared (released / retreated to bench) — fade it out.
     queueSlotClear(player);
+  } else if (newName && prevName === newName && prevHP > 0 && newHP === 0) {
+    // Same Pokemon, but HP just hit zero — KO.
+    queueSlotKO(player);
   }
 
   // Re-render the nameplate on every state change so HP bar stays in sync
@@ -174,10 +179,11 @@ function renderNameplate(player, active) {
     hpEl.textContent = `HP ${active.hp} / ${active.maxHp}`;
     el.classList.toggle('hp-mid', pct <= 0.5 && pct > 0.2);
     el.classList.toggle('hp-low', pct <= 0.2);
+    el.classList.toggle('ko', active.hp === 0);
   } else {
     bar.style.display = 'none';
     hpEl.style.display = 'none';
-    el.classList.remove('hp-mid', 'hp-low');
+    el.classList.remove('hp-mid', 'hp-low', 'ko');
   }
 }
 
@@ -232,29 +238,9 @@ function spawnFloatingNumber(player, text, kind) {
 }
 
 // When an active Pokemon is retreated to bench or released, fade the sprite
-// out and clear the slot. Uses the existing per-slot animation queue so this
-// sequences correctly with any pending entrance.
-function queueSlotClear(player) {
-  const q = state.slotAnim[player];
-  q.queued = '__clear__';
-  if (q.running) return;
-
-  (async () => {
-    while (q.queued) {
-      const next = q.queued;
-      q.queued = null;
-      q.running = true;
-      try {
-        if (next === '__clear__') await clearSlot(player);
-        else await updateSlot(player, next);
-      } catch (e) {
-        console.error(`[battlefield] slot ${player} clear failed`, e);
-      } finally {
-        q.running = false;
-      }
-    }
-  })();
-}
+// out and clear the slot. Uses the same per-slot animation queue so actions
+// sequence correctly with any pending entrance/KO.
+function queueSlotClear(player) { queueSlotAction(player, '__clear__'); }
 
 async function clearSlot(player) {
   const slotEl = document.getElementById(`slot${player}`);
@@ -265,9 +251,49 @@ async function clearSlot(player) {
   // Nameplate reset handled by renderNameplate(player, null) via state diff.
 }
 
-function queueSlotUpdate(player, pokemon) {
+// KO sequence: red flash, then sprite rotates backward + falls + fades.
+// Sprite src is removed afterwards so the slot is visually empty. The
+// nameplate stays (in .ko state) until the user promotes or releases.
+async function playKOSequence(player) {
+  const slotEl = document.getElementById(`slot${player}`);
+  const sprite = slotEl.querySelector('.slot-sprite');
+  const flash = slotEl.querySelector('.slot-flash');
+  if (!sprite?.getAttribute('src')) return;
+
+  // Clean any lingering idle/hit state
+  cancelAnimations(sprite);
+  cancelAnimations(flash);
+  sprite.classList.remove('idle', 'hit');
+
+  // Step 1: red flash (~150ms)
+  flash.classList.add('ko-flash');
+  try {
+    await flash.animate(
+      [{ opacity: 0 }, { opacity: 0.95, offset: 0.4 }, { opacity: 0.3 }, { opacity: 0 }],
+      { duration: 160, easing: 'ease-out' }
+    ).finished;
+  } catch {}
+  flash.classList.remove('ko-flash');
+
+  // Step 2: fall + fade (~560ms, from CSS animation)
+  void sprite.offsetWidth; // reset
+  sprite.classList.add('ko');
+  await new Promise(r => setTimeout(r, 580));
+
+  // Final: clear sprite. Nameplate stays (in .ko state) until state changes.
+  sprite.classList.remove('ko');
+  sprite.removeAttribute('src');
+  sprite.style.opacity = '';
+  sprite.style.transform = '';
+}
+
+// Per-slot action queue. Any new action replaces the queued one (intermediate
+// captures coalesce), and runs to completion before the next starts. Actions
+// are encoded as: a pokemon name string (sprite update), '__clear__' (fade
+// out + reset), or '__ko__' (KO animation).
+function queueSlotAction(player, action) {
   const q = state.slotAnim[player];
-  q.queued = pokemon;
+  q.queued = action;
   if (q.running) return;
 
   (async () => {
@@ -276,15 +302,20 @@ function queueSlotUpdate(player, pokemon) {
       q.queued = null;
       q.running = true;
       try {
-        await updateSlot(player, next);
+        if (next === '__clear__') await clearSlot(player);
+        else if (next === '__ko__') await playKOSequence(player);
+        else await updateSlot(player, next);
       } catch (e) {
-        console.error(`[battlefield] slot ${player} update failed`, e);
+        console.error(`[battlefield] slot ${player} action "${next}" failed`, e);
       } finally {
         q.running = false;
       }
     }
   })();
 }
+
+function queueSlotUpdate(player, pokemon) { queueSlotAction(player, pokemon); }
+function queueSlotKO(player) { queueSlotAction(player, '__ko__'); }
 
 async function updateSlot(player, pokemonName) {
   const slotEl = document.getElementById(`slot${player}`);

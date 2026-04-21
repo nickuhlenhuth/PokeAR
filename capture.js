@@ -515,7 +515,33 @@ function onActiveTileTap() {
     return;
   }
   const spriteUrl = spriteUrlCacheFor(active.name);
+  const isKO = active.hp === 0 && active.maxHp != null;
   const benchFull = firstEmptyBenchSlot() === -1;
+
+  if (isKO) {
+    showActionSheet({
+      subtitle: 'Knocked out',
+      name: active.name,
+      spriteUrl,
+      buttons: [
+        {
+          label: 'Capture new active',
+          primary: true,
+          onClick: () => {
+            hideActionSheet();
+            // Drop the KO'd Pokemon; capture replaces the active slot.
+            state.playerState.active = null;
+            persistAndBroadcast();
+            renderDashboardActive();
+            onSlotTap({ type: 'active' });
+          },
+        },
+        { label: 'Release', danger: true, onClick: releaseActive },
+      ],
+    });
+    return;
+  }
+
   showActionSheet({
     subtitle: 'Active',
     name: active.name,
@@ -608,7 +634,9 @@ function promoteBench(slot) {
   if (!benchPoke) return;
   const currentActive = state.playerState.active;
   state.playerState.active = benchPoke;
-  state.playerState.bench[slot] = currentActive || null;
+  // A KO'd active doesn't swap back to the bench — it's gone.
+  const activeIsKO = currentActive && currentActive.hp === 0 && currentActive.maxHp != null;
+  state.playerState.bench[slot] = activeIsKO ? null : (currentActive || null);
   persistAndBroadcast();
   renderDashboardAll();
   hideActionSheet();
@@ -655,7 +683,7 @@ async function renderDashboardActive() {
   const tile = document.getElementById('active-tile');
   if (!state.playerState.active) {
     tile.classList.add('active-empty');
-    tile.classList.remove('active-filled');
+    tile.classList.remove('active-filled', 'active-ko');
     tile.innerHTML = `
       <div>
         <div class="active-placeholder">No Active Pokemon</div>
@@ -668,14 +696,22 @@ async function renderDashboardActive() {
   const url = await getSpriteFor(name);
   tile.classList.remove('active-empty');
   tile.classList.add('active-filled');
-  const hpDisplay = (hp != null && maxHp != null) ? `HP ${hp} / ${maxHp}` : 'Tap to set HP';
-  const showBattle = (hp != null && maxHp != null);
+
+  const isKO = (hp === 0 && maxHp != null);
+  tile.classList.toggle('active-ko', isKO);
+
+  let hpLine;
+  if (isKO) hpLine = 'Knocked out';
+  else if (hp != null && maxHp != null) hpLine = `HP ${hp} / ${maxHp}`;
+  else hpLine = 'Tap to set HP';
+
+  const showBattle = (hp != null && maxHp != null && hp > 0);
   tile.innerHTML = `
     <div class="active-main">
-      <img class="active-sprite" src="${url || ''}" alt="" />
+      <img class="active-sprite${isKO ? ' ko' : ''}" src="${url || ''}" alt="" />
       <div>
         <div class="active-name">${prettifyName(name)}</div>
-        <div class="active-hp">${hpDisplay}</div>
+        <div class="active-hp">${hpLine}</div>
       </div>
     </div>
     ${showBattle ? `
@@ -684,6 +720,7 @@ async function renderDashboardActive() {
       <button data-battle="heal" class="heal">Heal</button>
       <button data-battle="take" class="take">Take</button>
     </div>` : ''}
+    ${isKO ? `<div class="ko-hint">Promote a bench Pokemon or capture a new active</div>` : ''}
   `;
 }
 

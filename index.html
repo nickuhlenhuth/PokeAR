@@ -95,6 +95,19 @@
       color: white;
       border-color: rgba(255, 255, 255, 0.22);
     }
+    .slot-status.ko {
+      background: rgba(80, 15, 15, 0.82);
+      border-color: rgba(255, 120, 120, 0.45);
+    }
+    .slot-status.ko .np-name { color: #ff9a9a; }
+    .slot-status.ko .np-name::after {
+      content: " — KO";
+      color: #ff7878;
+      font-weight: 600;
+      font-size: 11px;
+      margin-left: 4px;
+      letter-spacing: 0.5px;
+    }
     .slot-status .np-name {
       font-weight: 700;
       font-size: 13px;
@@ -139,6 +152,19 @@
     }
     .slot-sprite.hit { animation: hit-shake 260ms ease-out; }
 
+    /* KO fall — rotate backwards, translate down, fade. Slot 1's wrapper has
+       scaleX(-1), which mirrors the rotation so both sprites fall outward
+       (away from the center of the arena). */
+    @keyframes ko-fall {
+      0%   { opacity: 1; transform: translateY(0) rotate(0deg); }
+      15%  { opacity: 1; transform: translateY(-6px) rotate(8deg); }
+      100% { opacity: 0; transform: translateY(42px) rotate(90deg); }
+    }
+    .slot-sprite.ko {
+      animation: ko-fall 560ms cubic-bezier(0.55, 0, 0.95, 0.6) forwards;
+      transform-origin: 50% 85%;
+    }
+
     /* Green pulse overlay for heal — lives on the existing .slot-flash,
        swapped via a class. */
     .slot-flash.heal-pulse {
@@ -146,6 +172,14 @@
         rgba(120, 255, 170, 0.85) 0%,
         rgba(90, 230, 140, 0.5) 30%,
         rgba(90, 230, 140, 0) 65%);
+    }
+
+    /* KO flash — bright saturated red. */
+    .slot-flash.ko-flash {
+      background: radial-gradient(circle at center,
+        rgba(255, 90, 90, 0.95) 0%,
+        rgba(255, 200, 200, 0.7) 35%,
+        rgba(255, 90, 90, 0) 70%);
     }
 
     /* Floating damage / heal number — outside the slot wrappers so it

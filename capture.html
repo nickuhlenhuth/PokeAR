@@ -346,6 +346,24 @@
       font-size: 12px; color: #bbb; margin-top: 2px;
       font-family: ui-monospace, Menlo, monospace;
     }
+    #active-tile.active-ko {
+      background: rgba(80, 20, 20, 0.3);
+      border-color: rgba(255, 120, 120, 0.45);
+    }
+    #active-tile.active-ko .active-name { color: #ff9a9a; }
+    #active-tile.active-ko .active-hp { color: #ff7878; font-weight: 600; }
+    #active-tile.active-ko .active-sprite {
+      filter: grayscale(0.7) brightness(0.7) drop-shadow(0 2px 6px rgba(0,0,0,0.5));
+      transform: rotate(-15deg);
+    }
+    #active-tile .ko-hint {
+      font-size: 11px; color: #ff8a8a;
+      margin-top: 10px; text-align: center;
+      padding: 6px 10px;
+      background: rgba(140, 30, 30, 0.25);
+      border-radius: 6px;
+      border: 1px solid rgba(255, 120, 120, 0.3);
+    }
 
     /* ---------- camera-stage ---------- */
     #camera-stage { position: relative; }
