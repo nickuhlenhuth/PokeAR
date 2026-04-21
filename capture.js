@@ -222,6 +222,16 @@ async function startCamera() {
   await state.video.play();
 }
 
+// Fully release the camera hardware (LED off) when leaving the capture
+// session. Tracks must be stopped individually — just nulling the stream is
+// not enough.
+function stopCamera() {
+  if (!state.cameraStream) return;
+  for (const track of state.cameraStream.getTracks()) track.stop();
+  state.cameraStream = null;
+  if (state.video) state.video.srcObject = null;
+}
+
 // ---------- Pokemon list + Tesseract loading ----------
 
 async function ensurePokemonListLoaded() {
@@ -844,6 +854,12 @@ function showStage(name) {
   state.stage = name;
   for (const id of ['status-stage', 'trainer-stage', 'dashboard-stage', 'camera-stage', 'confirm-stage', 'typing-stage']) {
     document.getElementById(id).classList.toggle('active', id === `${name}-stage`);
+  }
+  // Release the camera when leaving the capture session. Keep it alive when
+  // bouncing camera ↔ confirm (try-again loop); everywhere else, shut it down
+  // so the device LED turns off.
+  if (name !== 'camera' && name !== 'confirm') {
+    stopCamera();
   }
   if (name === 'typing') {
     setTimeout(() => document.getElementById('type-input').focus(), 100);
