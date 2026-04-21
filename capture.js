@@ -171,20 +171,24 @@ async function onCapture() {
   showCameraMsg('Reading card…');
 
   try {
-    const match = await runOCRFromVideo();
+    const result = await runOCRFromVideo();
     hideCameraMsg();
 
-    if (!match) {
-      showConfirmError('Couldn\'t read the card name. Try again, or tap "Type name instead".');
+    console.log('[capture] OCR reads:', result.reads);
+
+    if (!result.match) {
+      const readSamples = result.reads.map(r => r.text).filter(Boolean);
+      const sample = readSamples.length ? readSamples.join(' / ') : '(nothing)';
+      showConfirmError(`Read: "${sample}" — no Pokemon match. Reframe the card (keep the NAME in the blue box, hold steady, avoid glare) or tap "Type name instead".`);
       return;
     }
 
-    const spriteUrl = await getSpriteFor(match.name);
-    state.lastCapture = { name: match.name, spriteUrl };
-    showConfirm(match.name, spriteUrl);
+    const spriteUrl = await getSpriteFor(result.match.name);
+    state.lastCapture = { name: result.match.name, spriteUrl };
+    showConfirm(result.match.name, spriteUrl);
   } catch (e) {
     console.error('[capture] OCR error', e);
-    showConfirmError('Something went wrong reading the card.');
+    showConfirmError('Something went wrong reading the card. Check the console.');
   } finally {
     btn.disabled = false;
   }
@@ -245,13 +249,15 @@ async function runOCRFromVideo() {
   writeMaskToCanvas(maskB, w, h, cvB);
 
   let best = null;
-  for (const cv of [cvA, cvB]) {
+  const reads = [];
+  for (const [label, cv] of [['A', cvA], ['B', cvB]]) {
     const { data } = await state.tesseractWorker.recognize(cv);
     const text = (data.text || '').trim().replace(/\n+/g, ' ');
+    reads.push({ label, text });
     const m = findBestMatchInText(text);
     if (m && (!best || m.score > best.score)) best = m;
   }
-  return best;
+  return { match: best, reads };
 }
 
 // ---------- Confirm stage ----------
