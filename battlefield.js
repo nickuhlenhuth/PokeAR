@@ -106,18 +106,33 @@ async function updateSlot(player, pokemonName) {
 
 async function fadeOutSprite(spriteEl) {
   spriteEl.classList.remove('idle');
+  cancelAnimations(spriteEl); // clear any lingering forward-filled animations
   await spriteEl.animate(
     [{ opacity: 1 }, { opacity: 0 }],
     { duration: 250, easing: 'ease-in', fill: 'forwards' }
   ).finished;
   spriteEl.removeAttribute('src');
+  cancelAnimations(spriteEl);
   spriteEl.style.opacity = '';
+}
+
+function cancelAnimations(el) {
+  // Forward-filled Web Animations keep their end state in the composition stack
+  // even after completion, which overrides inline styles and subsequent
+  // animations that don't set the same property. Cancel them for a clean slate.
+  el.getAnimations().forEach(a => a.cancel());
 }
 
 async function playEntrance(slotEl, spriteUrl, pokeballUrl) {
   const pokeball = slotEl.querySelector('.slot-pokeball');
   const sprite = slotEl.querySelector('.slot-sprite');
   const flash = slotEl.querySelector('.slot-flash');
+
+  // Clean slate — important on swaps where the previous entrance's filled
+  // animations would otherwise override the new pokeball's starting state.
+  cancelAnimations(pokeball);
+  cancelAnimations(sprite);
+  cancelAnimations(flash);
 
   // If we couldn't fetch the pokeball sprite, just pop the Pokemon in.
   if (!pokeballUrl) {
@@ -175,6 +190,11 @@ async function playEntrance(slotEl, spriteUrl, pokeballUrl) {
   ]);
 
   // Cleanup: hide pokeball, reset sprite inline styles, hand off to idle bob.
+  // Cancel the forward-filled entrance animations so the idle CSS keyframes
+  // have a clean transform slot to animate in.
+  cancelAnimations(pokeball);
+  cancelAnimations(sprite);
+  cancelAnimations(flash);
   pokeball.classList.remove('active');
   pokeball.style.opacity = '';
   pokeball.removeAttribute('src');
