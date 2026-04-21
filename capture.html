@@ -129,18 +129,25 @@
     .section-label:first-child { margin-top: 0; }
 
     #active-tile {
-      background: #1a1a22; border: 1px solid #2a2a35;
+      background: #15151c; border: 1px dashed #333;
       border-radius: 14px; padding: 18px;
       min-height: 160px;
       display: flex; align-items: center; justify-content: center;
       text-align: center;
       margin-bottom: 20px;
+      transition: background 0.15s, border-color 0.15s;
     }
     #active-tile.active-filled {
       flex-direction: row; justify-content: flex-start; gap: 14px; text-align: left;
+      background: #1e1e28; border: 1px solid #333;
+    }
+    #active-tile .active-plus {
+      font-size: 38px; color: #444; line-height: 1;
+      margin-bottom: 6px;
     }
     #active-tile .active-placeholder {
-      color: #888; font-size: 13px; line-height: 1.5; max-width: 240px;
+      color: #666; font-size: 12px; line-height: 1.4;
+      letter-spacing: 1px; text-transform: uppercase;
     }
     #active-tile .active-sprite {
       width: 100px; height: 100px; object-fit: contain; image-rendering: pixelated;
@@ -185,32 +192,26 @@
       -webkit-tap-highlight-color: rgba(255, 203, 5, 0.2);
     }
 
-    .dashboard-footer {
-      padding: 14px 20px 22px;
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      border-top: 1px solid #222;
+    .dashboard-hint {
+      text-align: center; font-size: 12px; color: #666;
+      padding: 0 24px 16px;
     }
 
-    /* ---------- destination-stage ---------- */
-    #destination-stage { align-items: center; justify-content: center; padding: 24px; text-align: center; }
-    #destination-stage .prompt { font-size: 18px; color: #aaa; margin-bottom: 10px; }
-    #destination-stage .name { font-size: 28px; font-weight: 800; text-transform: capitalize; margin-bottom: 14px; }
-    #destination-preview {
-      width: 140px; height: 140px; object-fit: contain; image-rendering: pixelated;
-      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
-      margin-bottom: 22px;
+    /* ---------- camera back button ---------- */
+    .topbar-left {
+      display: flex; align-items: center; gap: 10px;
     }
-    #destination-actions {
-      display: flex; gap: 12px; width: 100%; max-width: 340px; margin-bottom: 8px;
+    .icon-btn {
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      font-size: 18px; font-weight: 600;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(6px);
     }
-    #destination-actions button {
-      flex: 1; padding: 16px 0; font-size: 15px; font-weight: 700;
-      border: none; border-radius: 12px; cursor: pointer;
-    }
-    #destination-active-btn { background: #ffcb05; color: #1a1a1a; }
-    #destination-bench-btn { background: #2a2a35; color: white; border: 1px solid #444; }
-    #destination-bench-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    #destination-note { color: #888; font-size: 12px; margin: 4px 0 14px; }
 
     /* ---------- action sheet modal ---------- */
     #action-sheet {
@@ -432,7 +433,10 @@
     <div class="dashboard-body">
       <div class="section-label">Active</div>
       <div id="active-tile" class="active-empty">
-        <div class="active-placeholder">No active Pokemon yet. Tap "Capture new Pokemon" below to send one in.</div>
+        <div>
+          <div class="active-plus">+</div>
+          <div class="active-placeholder">Tap to add active</div>
+        </div>
       </div>
 
       <div class="section-label">Bench</div>
@@ -445,31 +449,18 @@
       </div>
     </div>
 
-    <div class="dashboard-footer">
-      <button id="capture-new-btn" class="primary-btn">Capture Pokemon</button>
-      <button id="type-new-btn" class="text-btn">Type name instead</button>
-    </div>
-  </section>
-
-  <!-- Destination picker (only used when ACTIVE is already filled) -->
-  <section id="destination-stage" class="stage">
-    <div class="prompt">Where does this Pokemon go?</div>
-    <div class="name" id="destination-name">—</div>
-    <img id="destination-preview" alt="" />
-    <div id="destination-actions">
-      <button id="destination-active-btn">Make Active</button>
-      <button id="destination-bench-btn">Add to Bench</button>
-    </div>
-    <div id="destination-note" style="display:none;">Bench is full — replace your active or release a bench Pokemon.</div>
-    <button id="destination-cancel" class="text-btn">Cancel</button>
+    <div class="dashboard-hint">Tap any slot to add a Pokemon. Order doesn't matter.</div>
   </section>
 
   <!-- Camera: live preview + capture button -->
   <section id="camera-stage" class="stage">
     <video id="video" autoplay playsinline muted></video>
     <header class="topbar">
-      <div class="badge" id="player-badge">Player ?</div>
-      <div class="room">Room: <span id="room-small">—</span></div>
+      <div class="topbar-left">
+        <button id="camera-back" class="icon-btn" aria-label="Back to dashboard">←</button>
+        <div class="badge" id="player-badge">Player ?</div>
+      </div>
+      <div class="room" id="camera-destination-label">Active</div>
     </header>
     <div id="last-sent-banner"></div>
     <div id="card-guide"><div class="name-band"></div></div>

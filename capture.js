@@ -9,14 +9,14 @@ const state = {
   channel: null,
   client: null,
   player: null,                 // 1 | 2 | null
-  stage: 'status',              // 'status' | 'trainer' | 'dashboard' | 'camera' | 'confirm' | 'typing' | 'destination'
+  stage: 'status',              // 'status' | 'trainer' | 'dashboard' | 'camera' | 'confirm' | 'typing'
   video: null,
   nameBandCanvas: null,
   tesseractWorker: null,
   tesseractReady: false,
   cameraStream: null,
   lastCapture: null,
-  pendingCapture: null,         // { name, spriteUrl } awaiting destination pick
+  pendingDestination: null,     // { type: 'active' } | { type: 'bench', slot } | null
   playerState: {                // own-player state (authoritative)
     trainerName: null,
     active: null,               // { name, hp, maxHp } or null
@@ -74,19 +74,13 @@ function wireButtons() {
   });
   document.getElementById('trainer-submit').addEventListener('click', onTrainerSubmit);
 
-  // Dashboard
+  // Dashboard — each slot is directly tappable (empty → opens camera for that
+  // slot, filled → action sheet for retreat/swap/release/replace).
   document.getElementById('dashboard-edit-name').addEventListener('click', onEditName);
-  document.getElementById('capture-new-btn').addEventListener('click', onCaptureNew);
-  document.getElementById('type-new-btn').addEventListener('click', () => showStage('typing'));
   document.getElementById('active-tile').addEventListener('click', onActiveTileTap);
   document.querySelectorAll('#bench-row .bench-tile').forEach((tile) => {
     tile.addEventListener('click', () => onBenchTileTap(Number(tile.dataset.slot)));
   });
-
-  // Destination picker
-  document.getElementById('destination-active-btn').addEventListener('click', onDestinationActive);
-  document.getElementById('destination-bench-btn').addEventListener('click', onDestinationBench);
-  document.getElementById('destination-cancel').addEventListener('click', onDestinationCancel);
 
   // Action sheet
   document.getElementById('action-sheet-cancel').addEventListener('click', hideActionSheet);
@@ -95,6 +89,7 @@ function wireButtons() {
   });
 
   // Camera
+  document.getElementById('camera-back').addEventListener('click', onCameraBack);
   document.getElementById('capture-btn').addEventListener('click', onCapture);
   document.getElementById('type-btn').addEventListener('click', () => showStage('typing'));
 
@@ -160,20 +155,40 @@ function onEditName() {
   setTimeout(() => input.focus(), 100);
 }
 
-// ---------- Capture entry points (from dashboard) ----------
+// ---------- Capture entry point: tap any slot ----------
+// Empty slots open the camera; the destination is remembered until the user
+// sends a Pokemon (capture confirm or typing send), at which point the
+// Pokemon lands in that slot.
 
-async function onCaptureNew() {
+async function onSlotTap(destination) {
+  state.pendingDestination = destination;
+  updateCameraDestinationLabel();
+
   if (!state.cameraStream) {
     try {
       await startCamera();
     } catch (e) {
-      console.error('[capture] camera error', e);
-      alert(`Camera unavailable: ${e.message}\nUse "Type name instead".`);
+      console.warn('[capture] camera unavailable, falling back to typing', e);
+      showStage('typing');
       return;
     }
   }
   showStage('camera');
   ensureTesseractWorker();
+}
+
+function onCameraBack() {
+  state.pendingDestination = null;
+  showStage('dashboard');
+}
+
+function updateCameraDestinationLabel() {
+  const label = document.getElementById('camera-destination-label');
+  const dest = state.pendingDestination;
+  if (!dest) { label.textContent = '—'; return; }
+  label.textContent = dest.type === 'active'
+    ? 'Adding: Active'
+    : `Adding: Bench ${dest.slot + 1}`;
 }
 
 async function startCamera() {
@@ -361,11 +376,12 @@ function showConfirmError(msg) {
   showStage('confirm');
 }
 
-async function onConfirmYes() {
+function onConfirmYes() {
   if (!state.lastCapture?.name) { onConfirmNo(); return; }
-  const { name, spriteUrl } = state.lastCapture;
+  const name = state.lastCapture.name;
   state.lastCapture = null;
-  await handleNewPokemonCapture(name, spriteUrl);
+  placePendingCapture(name);
+  showStage('dashboard');
 }
 
 function onConfirmNo() {
@@ -402,74 +418,48 @@ function onTypeInput(e) {
   }, 180);
 }
 
-async function onTypingSend() {
+function onTypingSend() {
   const name = document.getElementById('type-input').value.toLowerCase().trim();
   if (!name || !pokemonNameSet?.has(name)) return;
-  const spriteUrl = await getSpriteFor(name);
   document.getElementById('type-input').value = '';
   document.getElementById('type-preview').textContent = 'Start typing…';
   document.getElementById('typing-send').disabled = true;
-  await handleNewPokemonCapture(name, spriteUrl);
+  placePendingCapture(name);
+  showStage('dashboard');
 }
 
 function onTypingBack() {
+  state.pendingDestination = null;
   showStage('dashboard');
 }
 
-// ---------- New-Pokemon flow: destination picker ----------
+// ---------- Placing captures into the pending slot ----------
 
-// Called from both confirm (OCR) and typing flows after the user has picked a
-// Pokemon. If active is empty it goes straight there; otherwise the user picks
-// active vs. bench.
-async function handleNewPokemonCapture(name, spriteUrl) {
-  if (!state.playerState.active) {
-    setActive(mkPoke(name));
-    showStage('dashboard');
+function placePendingCapture(name) {
+  const dest = state.pendingDestination;
+  state.pendingDestination = null;
+  if (!dest) {
+    console.warn('[capture] placement called with no pendingDestination');
     return;
   }
-  state.pendingCapture = { name, spriteUrl };
-  renderDestination(name, spriteUrl);
-  showStage('destination');
-}
-
-function renderDestination(name, spriteUrl) {
-  document.getElementById('destination-name').textContent = prettifyName(name);
-  const img = document.getElementById('destination-preview');
-  if (spriteUrl) { img.src = spriteUrl; img.style.display = 'block'; }
-  else { img.removeAttribute('src'); img.style.display = 'none'; }
-  const benchFull = firstEmptyBenchSlot() === -1;
-  document.getElementById('destination-bench-btn').disabled = benchFull;
-  document.getElementById('destination-note').style.display = benchFull ? 'block' : 'none';
-}
-
-function onDestinationActive() {
-  if (!state.pendingCapture) { showStage('dashboard'); return; }
-  setActive(mkPoke(state.pendingCapture.name));
-  state.pendingCapture = null;
-  showStage('dashboard');
-}
-
-function onDestinationBench() {
-  if (!state.pendingCapture) { showStage('dashboard'); return; }
-  const slot = firstEmptyBenchSlot();
-  if (slot === -1) return;
-  state.playerState.bench[slot] = mkPoke(state.pendingCapture.name);
-  state.pendingCapture = null;
-  persistAndBroadcast();
-  renderDashboardBench();
-  showStage('dashboard');
-}
-
-function onDestinationCancel() {
-  state.pendingCapture = null;
-  showStage('dashboard');
+  if (dest.type === 'active') {
+    setActive(mkPoke(name));
+  } else if (dest.type === 'bench') {
+    state.playerState.bench[dest.slot] = mkPoke(name);
+    persistAndBroadcast();
+    renderDashboardBench();
+  }
 }
 
 // ---------- Active / bench tile taps ----------
+// Empty slots → open camera for that destination. Filled slots → action sheet.
 
 function onActiveTileTap() {
   const active = state.playerState.active;
-  if (!active) return; // empty — no actions
+  if (!active) {
+    onSlotTap({ type: 'active' });
+    return;
+  }
   const spriteUrl = spriteUrlCacheFor(active.name);
   const benchFull = firstEmptyBenchSlot() === -1;
   showActionSheet({
@@ -482,6 +472,13 @@ function onActiveTileTap() {
         disabled: benchFull,
         onClick: retreatActive,
       },
+      {
+        label: 'Replace with new capture',
+        onClick: () => {
+          hideActionSheet();
+          onSlotTap({ type: 'active' });
+        },
+      },
       { label: 'Release', danger: true, onClick: releaseActive },
     ],
   });
@@ -489,15 +486,28 @@ function onActiveTileTap() {
 
 function onBenchTileTap(slot) {
   const poke = state.playerState.bench[slot];
-  if (!poke) return;
+  if (!poke) {
+    onSlotTap({ type: 'bench', slot });
+    return;
+  }
   const spriteUrl = spriteUrlCacheFor(poke.name);
   showActionSheet({
     subtitle: `Bench slot ${slot + 1}`,
     name: poke.name,
     spriteUrl,
     buttons: [
-      { label: state.playerState.active ? 'Swap to active' : 'Make active',
-        primary: true, onClick: () => promoteBench(slot) },
+      {
+        label: state.playerState.active ? 'Swap to active' : 'Make active',
+        primary: true,
+        onClick: () => promoteBench(slot),
+      },
+      {
+        label: 'Replace with new capture',
+        onClick: () => {
+          hideActionSheet();
+          onSlotTap({ type: 'bench', slot });
+        },
+      },
       { label: 'Release', danger: true, onClick: () => releaseBench(slot) },
     ],
   });
