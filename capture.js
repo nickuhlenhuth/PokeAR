@@ -28,7 +28,6 @@ function init() {
   const params = new URLSearchParams(window.location.search);
   state.roomId = params.get('room');
   document.getElementById('room-code-value').textContent = state.roomId || '—';
-  document.getElementById('room-small').textContent = state.roomId || '—';
   document.getElementById('trainer-room-code').textContent = state.roomId || '—';
 
   if (!state.roomId) {
