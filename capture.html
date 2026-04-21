@@ -258,6 +258,95 @@
       font-size: 14px; cursor: pointer; margin-top: 6px;
     }
 
+    /* ---------- damage-entry modal ---------- */
+    #damage-modal {
+      position: fixed; inset: 0; z-index: 90;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(3px);
+      padding: 20px;
+    }
+    #damage-modal.visible { display: flex; }
+    #damage-modal .box {
+      background: #1a1a22;
+      border: 1px solid #333;
+      border-radius: 16px;
+      padding: 22px 22px 20px;
+      width: 100%; max-width: 380px;
+      animation: sheet-in 0.22s ease-out;
+    }
+    #damage-modal .dmg-title {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+      color: #888; margin-bottom: 4px;
+    }
+    #damage-modal .dmg-headline {
+      font-size: 20px; font-weight: 700; margin-bottom: 18px;
+    }
+    #damage-modal.attack .dmg-headline,
+    #damage-modal.take .dmg-headline { color: #ff9090; }
+    #damage-modal.heal .dmg-headline { color: #88ff9c; }
+
+    #damage-presets {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+      margin-bottom: 10px;
+    }
+    #damage-presets button {
+      padding: 14px 0; font-size: 17px; font-weight: 700;
+      background: #2a2a35; color: white; border: 1px solid #3a3a45;
+      border-radius: 10px; cursor: pointer;
+    }
+    #damage-modal.attack #damage-presets button,
+    #damage-modal.take #damage-presets button { color: #ff9090; }
+    #damage-modal.heal #damage-presets button { color: #88ff9c; }
+    #damage-presets button:hover { background: #333345; }
+
+    #damage-custom-row {
+      display: flex; align-items: center; gap: 8px; margin: 10px 0 16px;
+    }
+    #damage-custom-row label {
+      font-size: 13px; color: #aaa;
+    }
+    #damage-custom {
+      flex: 1; padding: 12px; font-size: 17px; font-weight: 700;
+      background: #1e1e28; color: white;
+      border: 1.5px solid #333; border-radius: 10px; outline: none;
+      text-align: center;
+    }
+    #damage-custom:focus { border-color: #ffcb05; }
+
+    #damage-actions { display: flex; gap: 10px; }
+    #damage-actions button {
+      flex: 1; padding: 12px 0; font-size: 15px; font-weight: 700;
+      border: none; border-radius: 10px; cursor: pointer;
+    }
+    #damage-cancel { background: #333; color: white; }
+    #damage-confirm { background: #ffcb05; color: #1a1a1a; }
+    #damage-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Active tile battle actions */
+    #active-tile .battle-actions {
+      display: flex; gap: 6px; margin-top: 10px;
+      width: 100%;
+    }
+    #active-tile .battle-actions button {
+      flex: 1; padding: 9px 0; font-size: 12px; font-weight: 700;
+      border: 1px solid #3a3a45; border-radius: 8px;
+      background: #2a2a35; color: white; cursor: pointer;
+    }
+    #active-tile .battle-actions button.attack { color: #ffb0b0; border-color: rgba(255, 100, 100, 0.4); }
+    #active-tile .battle-actions button.heal { color: #a0ffab; border-color: rgba(100, 220, 130, 0.4); }
+    #active-tile .battle-actions button.take { color: #ffd280; border-color: rgba(255, 180, 80, 0.4); }
+    #active-tile.active-filled {
+      flex-direction: column; align-items: stretch; text-align: left;
+    }
+    #active-tile .active-main {
+      display: flex; align-items: center; gap: 14px;
+    }
+    #active-tile .active-hp {
+      font-size: 12px; color: #bbb; margin-top: 2px;
+      font-family: ui-monospace, Menlo, monospace;
+    }
+
     /* ---------- camera-stage ---------- */
     #camera-stage { position: relative; }
     #video {
@@ -340,6 +429,19 @@
       margin-bottom: 24px;
       filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
     }
+    .hp-row {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      margin-bottom: 18px; color: #ccc; font-size: 14px;
+    }
+    .hp-row label { font-weight: 600; }
+    .hp-input {
+      width: 80px; padding: 10px 8px; font-size: 18px; font-weight: 700;
+      text-align: center; background: #1e1e28; color: white;
+      border: 1.5px solid #333; border-radius: 10px; outline: none;
+    }
+    .hp-input:focus { border-color: #ffcb05; }
+    .hp-input.detected { border-color: rgba(20, 150, 60, 0.6); }
+
     #confirm-actions { display: flex; gap: 12px; width: 100%; max-width: 320px; margin-bottom: 16px; }
     #confirm-actions button { flex: 1; padding: 14px 0; font-size: 15px; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; }
     #confirm-yes { background: #14a048; color: white; }
@@ -476,6 +578,10 @@
     <div id="confirm-headline">Detected</div>
     <div id="confirm-name">—</div>
     <img id="confirm-preview" alt="" />
+    <div class="hp-row" id="confirm-hp-row">
+      <label for="confirm-hp">HP</label>
+      <input id="confirm-hp" class="hp-input" type="number" inputmode="numeric" min="0" max="999" placeholder="—" />
+    </div>
     <div id="confirm-actions">
       <button id="confirm-no">Try again</button>
       <button id="confirm-yes">Send</button>
@@ -491,6 +597,10 @@
     <input id="type-input" type="text" list="pokemon-names" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. pikachu" />
     <datalist id="pokemon-names"></datalist>
     <div id="type-preview">Start typing…</div>
+    <div class="hp-row">
+      <label for="type-hp">HP</label>
+      <input id="type-hp" class="hp-input" type="number" inputmode="numeric" min="0" max="999" placeholder="—" />
+    </div>
     <div id="typing-actions">
       <button id="typing-back">Back</button>
       <button id="typing-send" disabled>Send</button>
@@ -517,6 +627,29 @@
     </div>
     <div id="action-sheet-buttons"></div>
     <button class="sheet-cancel" id="action-sheet-cancel">Cancel</button>
+  </div>
+</div>
+
+<div id="damage-modal">
+  <div class="box">
+    <div class="dmg-title" id="damage-modal-title">Damage</div>
+    <div class="dmg-headline" id="damage-modal-headline">—</div>
+    <div id="damage-presets">
+      <button data-val="10">10</button>
+      <button data-val="20">20</button>
+      <button data-val="30">30</button>
+      <button data-val="40">40</button>
+      <button data-val="50">50</button>
+      <button data-val="60">60</button>
+    </div>
+    <div id="damage-custom-row">
+      <label for="damage-custom">Custom</label>
+      <input id="damage-custom" type="number" inputmode="numeric" min="1" max="999" placeholder="—" />
+    </div>
+    <div id="damage-actions">
+      <button id="damage-cancel">Cancel</button>
+      <button id="damage-confirm" disabled>Confirm</button>
+    </div>
   </div>
 </div>
 

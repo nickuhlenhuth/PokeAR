@@ -17,6 +17,7 @@ const state = {
   cameraStream: null,
   lastCapture: null,
   pendingDestination: null,     // { type: 'active' } | { type: 'bench', slot } | null
+  damageMode: null,             // 'attack' | 'heal' | 'take' while modal is open
   playerState: {                // own-player state (authoritative)
     trainerName: null,
     active: null,               // { name, hp, maxHp } or null
@@ -53,6 +54,7 @@ function init() {
 
   state.channel
     .on('broadcast', { event: 'assign' }, handleAssignBroadcast)
+    .on('broadcast', { event: 'attack_effect' }, handleAttackEffectBroadcast)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'player', clientId: state.clientId });
@@ -74,11 +76,31 @@ function wireButtons() {
   document.getElementById('trainer-submit').addEventListener('click', onTrainerSubmit);
 
   // Dashboard — each slot is directly tappable (empty → opens camera for that
-  // slot, filled → action sheet for retreat/swap/release/replace).
+  // slot, filled → action sheet for retreat/swap/release/replace). Inline
+  // battle-action buttons on the filled active tile are handled separately.
   document.getElementById('dashboard-edit-name').addEventListener('click', onEditName);
-  document.getElementById('active-tile').addEventListener('click', onActiveTileTap);
+  document.getElementById('active-tile').addEventListener('click', (e) => {
+    const battleBtn = e.target.closest('[data-battle]');
+    if (battleBtn) {
+      e.stopPropagation();
+      openDamageModal(battleBtn.dataset.battle);
+      return;
+    }
+    onActiveTileTap();
+  });
   document.querySelectorAll('#bench-row .bench-tile').forEach((tile) => {
     tile.addEventListener('click', () => onBenchTileTap(Number(tile.dataset.slot)));
+  });
+
+  // Damage modal
+  document.getElementById('damage-cancel').addEventListener('click', closeDamageModal);
+  document.getElementById('damage-confirm').addEventListener('click', onDamageConfirm);
+  document.querySelectorAll('#damage-presets button').forEach((btn) => {
+    btn.addEventListener('click', () => onDamagePreset(Number(btn.dataset.val)));
+  });
+  document.getElementById('damage-custom').addEventListener('input', onDamageCustomInput);
+  document.getElementById('damage-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'damage-modal') closeDamageModal();
   });
 
   // Action sheet
@@ -227,7 +249,9 @@ async function ensureTesseractWorker() {
   try {
     state.tesseractWorker = await Tesseract.createWorker('eng');
     await state.tesseractWorker.setParameters({
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz \'',
+      // Digits included so the "40 HP" text on the name band reads cleanly
+      // alongside the Pokemon name.
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \'',
       // PSM 6 = "single uniform block of text" — handles the multi-line
       // ("Basic Pokémon" subtitle + name) name band better than PSM 7.
       tessedit_pageseg_mode: '6',
@@ -275,8 +299,8 @@ async function onCapture() {
     }
 
     const spriteUrl = await getSpriteFor(result.match.name);
-    state.lastCapture = { name: result.match.name, spriteUrl };
-    showConfirm(result.match.name, spriteUrl);
+    state.lastCapture = { name: result.match.name, spriteUrl, hp: result.hp };
+    showConfirm(result.match.name, spriteUrl, result.hp);
   } catch (e) {
     console.error('[capture] OCR error', e);
     showConfirmError('Something went wrong reading the card. Check the console.');
@@ -336,6 +360,7 @@ async function runOCRFromVideo() {
   writeMaskToCanvas(maskB, w, h, cvB);
 
   let best = null;
+  let bestHP = null;
   const reads = [];
   for (const [label, cv] of [['A', cvA], ['B', cvB]]) {
     const { data } = await state.tesseractWorker.recognize(cv);
@@ -343,13 +368,16 @@ async function runOCRFromVideo() {
     reads.push({ label, text });
     const m = findBestMatchInText(text);
     if (m && (!best || m.score > best.score)) best = m;
+    // Try to extract HP from whichever read is cleaner; prefer the first match.
+    const hp = findHPInText(text);
+    if (hp != null && bestHP == null) bestHP = hp;
   }
-  return { match: best, reads };
+  return { match: best, reads, hp: bestHP };
 }
 
 // ---------- Confirm stage ----------
 
-function showConfirm(name, spriteUrl) {
+function showConfirm(name, spriteUrl, hp) {
   document.getElementById('confirm-name').textContent = prettifyName(name);
   document.getElementById('confirm-error').style.display = 'none';
   document.getElementById('confirm-yes').style.display = '';
@@ -361,6 +389,10 @@ function showConfirm(name, spriteUrl) {
     img.removeAttribute('src');
     img.style.display = 'none';
   }
+  const hpInput = document.getElementById('confirm-hp');
+  hpInput.value = hp != null ? String(hp) : '';
+  hpInput.classList.toggle('detected', hp != null);
+  document.getElementById('confirm-hp-row').style.display = 'flex';
   showStage('confirm');
 }
 
@@ -369,6 +401,7 @@ function showConfirmError(msg) {
   document.getElementById('confirm-preview').style.display = 'none';
   document.getElementById('confirm-preview').removeAttribute('src');
   document.getElementById('confirm-yes').style.display = 'none';
+  document.getElementById('confirm-hp-row').style.display = 'none';
   const err = document.getElementById('confirm-error');
   err.textContent = msg;
   err.style.display = 'block';
@@ -378,9 +411,18 @@ function showConfirmError(msg) {
 function onConfirmYes() {
   if (!state.lastCapture?.name) { onConfirmNo(); return; }
   const name = state.lastCapture.name;
+  const hp = readHPInput('confirm-hp');
   state.lastCapture = null;
-  placePendingCapture(name);
+  placePendingCapture(name, hp);
   showStage('dashboard');
+}
+
+function readHPInput(id) {
+  const raw = document.getElementById(id).value.trim();
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
 }
 
 function onConfirmNo() {
@@ -420,10 +462,12 @@ function onTypeInput(e) {
 function onTypingSend() {
   const name = document.getElementById('type-input').value.toLowerCase().trim();
   if (!name || !pokemonNameSet?.has(name)) return;
+  const hp = readHPInput('type-hp');
   document.getElementById('type-input').value = '';
+  document.getElementById('type-hp').value = '';
   document.getElementById('type-preview').textContent = 'Start typing…';
   document.getElementById('typing-send').disabled = true;
-  placePendingCapture(name);
+  placePendingCapture(name, hp);
   showStage('dashboard');
 }
 
@@ -434,17 +478,18 @@ function onTypingBack() {
 
 // ---------- Placing captures into the pending slot ----------
 
-function placePendingCapture(name) {
+function placePendingCapture(name, hp) {
   const dest = state.pendingDestination;
   state.pendingDestination = null;
   if (!dest) {
     console.warn('[capture] placement called with no pendingDestination');
     return;
   }
+  const poke = mkPoke(name, hp);
   if (dest.type === 'active') {
-    setActive(mkPoke(name));
+    setActive(poke);
   } else if (dest.type === 'bench') {
-    state.playerState.bench[dest.slot] = mkPoke(name);
+    state.playerState.bench[dest.slot] = poke;
     persistAndBroadcast();
     renderDashboardBench();
   }
@@ -514,9 +559,9 @@ function onBenchTileTap(slot) {
 
 // ---------- State operations ----------
 
-function mkPoke(name) {
-  // HP fields stay null until Phase 8 adds HP tracking.
-  return { name, hp: null, maxHp: null };
+function mkPoke(name, hp) {
+  if (hp == null) return { name, hp: null, maxHp: null };
+  return { name, hp, maxHp: hp };
 }
 
 function setActive(poke) {
@@ -609,16 +654,26 @@ async function renderDashboardActive() {
     `;
     return;
   }
-  const name = state.playerState.active.name;
+  const { name, hp, maxHp } = state.playerState.active;
   const url = await getSpriteFor(name);
   tile.classList.remove('active-empty');
   tile.classList.add('active-filled');
+  const hpDisplay = (hp != null && maxHp != null) ? `HP ${hp} / ${maxHp}` : 'Tap to set HP';
+  const showBattle = (hp != null && maxHp != null);
   tile.innerHTML = `
-    <img class="active-sprite" src="${url || ''}" alt="" />
-    <div>
-      <div class="active-name">${prettifyName(name)}</div>
-      <div class="active-note">Tap for actions</div>
+    <div class="active-main">
+      <img class="active-sprite" src="${url || ''}" alt="" />
+      <div>
+        <div class="active-name">${prettifyName(name)}</div>
+        <div class="active-hp">${hpDisplay}</div>
+      </div>
     </div>
+    ${showBattle ? `
+    <div class="battle-actions">
+      <button data-battle="attack" class="attack">Attack</button>
+      <button data-battle="heal" class="heal">Heal</button>
+      <button data-battle="take" class="take">Take</button>
+    </div>` : ''}
   `;
 }
 
@@ -673,6 +728,114 @@ function hideActionSheet() {
 // action sheet can show a sprite thumbnail without awaiting a fetch.
 function spriteUrlCacheFor(name) {
   return (typeof spriteCache !== 'undefined' && spriteCache[name]) || null;
+}
+
+// ---------- Damage-entry modal (Attack / Heal / Take Damage) ----------
+
+function openDamageModal(mode) {
+  const active = state.playerState.active;
+  if (!active || active.hp == null) return;
+  state.damageMode = mode;
+  const modal = document.getElementById('damage-modal');
+  modal.classList.remove('attack', 'heal', 'take');
+  modal.classList.add(mode);
+  const titleMap = { attack: 'Attack', heal: 'Heal', take: 'Take Damage' };
+  document.getElementById('damage-modal-title').textContent = titleMap[mode];
+  const activeName = prettifyName(active.name);
+  const headlineMap = {
+    attack: `${activeName} attacks the opposing Pokemon`,
+    heal: `Heal ${activeName}`,
+    take: `${activeName} takes damage`,
+  };
+  document.getElementById('damage-modal-headline').textContent = headlineMap[mode];
+  document.getElementById('damage-custom').value = '';
+  document.getElementById('damage-confirm').disabled = true;
+  modal.classList.add('visible');
+}
+
+function closeDamageModal() {
+  document.getElementById('damage-modal').classList.remove('visible');
+  state.damageMode = null;
+}
+
+function onDamagePreset(val) {
+  const input = document.getElementById('damage-custom');
+  input.value = String(val);
+  document.getElementById('damage-confirm').disabled = !(val > 0);
+}
+
+function onDamageCustomInput() {
+  const val = parseInt(document.getElementById('damage-custom').value, 10);
+  document.getElementById('damage-confirm').disabled = !(val > 0);
+}
+
+async function onDamageConfirm() {
+  const amount = parseInt(document.getElementById('damage-custom').value, 10);
+  if (!(amount > 0)) return;
+  const mode = state.damageMode;
+  closeDamageModal();
+  if (mode === 'attack') await doAttack(amount);
+  else if (mode === 'heal') await doHeal(amount);
+  else if (mode === 'take') await doTakeDamage(amount);
+}
+
+async function doAttack(damage) {
+  if (!state.playerState.active) return;
+  const targetPlayer = state.player === 1 ? 2 : 1;
+  await state.channel.send({
+    type: 'broadcast',
+    event: 'attack_effect',
+    payload: {
+      attackerPlayer: state.player,
+      targetPlayer,
+      damage,
+    },
+  });
+  console.log(`[capture] Attack → Trainer ${targetPlayer} for ${damage}`);
+}
+
+async function doHeal(amount) {
+  const active = state.playerState.active;
+  if (!active || active.maxHp == null) return;
+  active.hp = Math.min(active.maxHp, (active.hp ?? 0) + amount);
+  persistAndBroadcast();
+  renderDashboardActive();
+  await state.channel.send({
+    type: 'broadcast',
+    event: 'heal_effect',
+    payload: { targetPlayer: state.player, amount },
+  });
+  console.log(`[capture] Heal +${amount}; hp now ${active.hp}/${active.maxHp}`);
+}
+
+async function doTakeDamage(damage) {
+  const active = state.playerState.active;
+  if (!active || active.hp == null) return;
+  active.hp = Math.max(0, active.hp - damage);
+  persistAndBroadcast();
+  renderDashboardActive();
+  await state.channel.send({
+    type: 'broadcast',
+    event: 'attack_effect',
+    payload: {
+      attackerPlayer: state.player,
+      targetPlayer: state.player,
+      damage,
+    },
+  });
+  console.log(`[capture] Took ${damage}; hp now ${active.hp}`);
+}
+
+// Incoming attack — if targeted at us, apply damage and broadcast new state.
+async function handleAttackEffectBroadcast({ payload }) {
+  const { targetPlayer, damage } = payload || {};
+  if (targetPlayer !== state.player) return;
+  const active = state.playerState.active;
+  if (!active || active.hp == null) return;
+  active.hp = Math.max(0, active.hp - damage);
+  persistAndBroadcast();
+  renderDashboardActive();
+  console.log(`[capture] Hit for ${damage}; hp now ${active.hp}`);
 }
 
 // ---------- UI helpers ----------

@@ -40,6 +40,8 @@ function init() {
   state.channel
     .on('presence', { event: 'sync' }, handlePresenceSync)
     .on('broadcast', { event: 'player_state' }, handlePlayerStateBroadcast)
+    .on('broadcast', { event: 'attack_effect' }, handleAttackEffectBroadcast)
+    .on('broadcast', { event: 'heal_effect' }, handleHealEffectBroadcast)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'battlefield' });
@@ -57,7 +59,7 @@ function handlePlayerStateBroadcast({ payload }) {
 
   const prev = state.playerStates[player];
   state.playerStates[player] = newState;
-  console.log(`[battlefield] player_state for Player ${player}`, newState);
+  console.log(`[battlefield] player_state for Trainer ${player}`, newState);
 
   // Trainer name changed (or first set)
   if (!prev || prev.trainerName !== newState.trainerName) {
@@ -74,16 +76,35 @@ function handlePlayerStateBroadcast({ payload }) {
     queueSlotClear(player);
   }
 
-  // Bench may have changed — diff per-slot.
+  // Re-render the nameplate on every state change so HP bar stays in sync
+  // (covers attack/heal/take-damage flows even when the Pokemon name didn't
+  // change). Elements are updated in place so the bar width animates.
+  renderNameplate(player, newState.active);
+
+  // Bench diff — slot might change by name OR by HP.
   const prevBench = prev?.bench || [null, null, null, null, null];
   const newBench = newState.bench || [null, null, null, null, null];
   for (let i = 0; i < 5; i++) {
-    const prevName = prevBench[i]?.name || null;
-    const newName = newBench[i]?.name || null;
-    if (prevName !== newName) {
-      renderBenchSlot(player, i, newBench[i]);
-    }
+    const pb = prevBench[i];
+    const nb = newBench[i];
+    const changed =
+      (pb?.name || null) !== (nb?.name || null) ||
+      (pb?.hp ?? null) !== (nb?.hp ?? null) ||
+      (pb?.maxHp ?? null) !== (nb?.maxHp ?? null);
+    if (changed) renderBenchSlot(player, i, nb);
   }
+}
+
+function handleAttackEffectBroadcast({ payload }) {
+  const { targetPlayer, damage } = payload || {};
+  if (targetPlayer !== 1 && targetPlayer !== 2) return;
+  playHitEffect(targetPlayer, damage);
+}
+
+function handleHealEffectBroadcast({ payload }) {
+  const { targetPlayer, amount } = payload || {};
+  if (targetPlayer !== 1 && targetPlayer !== 2) return;
+  playHealEffect(targetPlayer, amount);
 }
 
 function renderTrainerName(player, name) {
@@ -107,10 +128,107 @@ async function renderBenchSlot(player, slot, poke) {
   }
   const url = await getSpriteFor(poke.name);
   el.classList.add('filled');
+  const hpTxt = (poke.hp != null && poke.maxHp != null) ? `${poke.hp}/${poke.maxHp}` : '';
   el.innerHTML = `
     <img src="${url || ''}" alt="" />
     <div class="bench-slot-name">${prettifyName(poke.name)}</div>
+    ${hpTxt ? `<div class="bench-slot-hp">${hpTxt}</div>` : ''}
   `;
+}
+
+// Nameplate for the active slot — persists across HP changes so the bar
+// width animates via CSS transition (transitioning a width change on the
+// same element, rather than replacing the element each time).
+function renderNameplate(player, active) {
+  const el = document.getElementById(`slot${player}-status`);
+  if (!el) return;
+
+  if (!active) {
+    el.innerHTML = `Waiting for Trainer ${player}…`;
+    el.classList.remove('filled', 'hp-low', 'hp-mid');
+    return;
+  }
+
+  // Ensure scaffold exists
+  if (!el.querySelector('.np-name')) {
+    el.innerHTML = `
+      <div class="np-name"></div>
+      <div class="np-bar" style="display:none;"><div class="np-bar-fill"></div></div>
+      <div class="np-hp" style="display:none;"></div>
+    `;
+  }
+
+  el.classList.add('filled');
+  el.querySelector('.np-name').textContent = prettifyName(active.name);
+
+  const bar = el.querySelector('.np-bar');
+  const barFill = el.querySelector('.np-bar-fill');
+  const hpEl = el.querySelector('.np-hp');
+
+  const hasHp = active.hp != null && active.maxHp != null;
+  if (hasHp) {
+    const pct = Math.max(0, Math.min(1, active.hp / active.maxHp));
+    bar.style.display = '';
+    hpEl.style.display = '';
+    barFill.style.width = `${pct * 100}%`;
+    hpEl.textContent = `HP ${active.hp} / ${active.maxHp}`;
+    el.classList.toggle('hp-mid', pct <= 0.5 && pct > 0.2);
+    el.classList.toggle('hp-low', pct <= 0.2);
+  } else {
+    bar.style.display = 'none';
+    hpEl.style.display = 'none';
+    el.classList.remove('hp-mid', 'hp-low');
+  }
+}
+
+// ---------- Hit + heal effects ----------
+
+function playHitEffect(player, damage) {
+  playSpriteHit(player);
+  playFlash(player, 'damage');
+  spawnFloatingNumber(player, `-${damage}`, 'damage');
+}
+
+function playHealEffect(player, amount) {
+  playFlash(player, 'heal');
+  spawnFloatingNumber(player, `+${amount}`, 'heal');
+}
+
+function playSpriteHit(player) {
+  const sprite = document.querySelector(`#slot${player} .slot-sprite`);
+  if (!sprite) return;
+  sprite.classList.remove('idle');
+  sprite.classList.remove('hit');
+  void sprite.offsetWidth; // reset any in-progress animation
+  sprite.classList.add('hit');
+  setTimeout(() => {
+    sprite.classList.remove('hit');
+    if (sprite.getAttribute('src')) sprite.classList.add('idle');
+  }, 270);
+}
+
+function playFlash(player, kind) {
+  const flash = document.querySelector(`#slot${player} .slot-flash`);
+  if (!flash) return;
+  flash.classList.toggle('heal-pulse', kind === 'heal');
+  cancelAnimations(flash);
+  flash.animate(
+    [{ opacity: 0 }, { opacity: 0.95, offset: 0.4 }, { opacity: 0 }],
+    { duration: 230, easing: 'ease-out' }
+  ).finished
+    .then(() => flash.classList.remove('heal-pulse'))
+    .catch(() => {});
+}
+
+function spawnFloatingNumber(player, text, kind) {
+  const container = document.getElementById('hit-effects');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className = `hit-number ${kind}`;
+  el.dataset.player = String(player);
+  el.textContent = text;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 1000);
 }
 
 // When an active Pokemon is retreated to bench or released, fade the sprite
@@ -144,9 +262,7 @@ async function clearSlot(player) {
   if (spriteEl.getAttribute('src')) {
     await fadeOutSprite(spriteEl);
   }
-  const statusEl = document.getElementById(`slot${player}-status`);
-  statusEl.textContent = `Waiting for Trainer ${player}…`;
-  statusEl.classList.remove('filled');
+  // Nameplate reset handled by renderNameplate(player, null) via state diff.
 }
 
 function queueSlotUpdate(player, pokemon) {
@@ -189,10 +305,7 @@ async function updateSlot(player, pokemonName) {
   }
 
   await playEntrance(slotEl, spriteUrl, pokeballUrl);
-
-  const statusEl = document.getElementById(`slot${player}-status`);
-  statusEl.textContent = prettifyName(pokemonName);
-  statusEl.classList.add('filled');
+  // Nameplate (name + HP bar) is managed by renderNameplate via state diff.
 }
 
 async function fadeOutSprite(spriteEl) {
@@ -409,10 +522,26 @@ function isDemoMode() {
 }
 
 function loadDemoSprites() {
-  renderTrainerName(1, 'Ash');
-  renderTrainerName(2, 'Gary');
-  queueSlotUpdate(1, 'pikachu');
-  queueSlotUpdate(2, 'charizard');
+  handlePlayerStateBroadcast({
+    payload: {
+      player: 1,
+      state: {
+        trainerName: 'Ash',
+        active: { name: 'pikachu', hp: 60, maxHp: 60 },
+        bench: [null, null, null, null, null],
+      },
+    },
+  });
+  handlePlayerStateBroadcast({
+    payload: {
+      player: 2,
+      state: {
+        trainerName: 'Gary',
+        active: { name: 'charizard', hp: 120, maxHp: 120 },
+        bench: [null, null, null, null, null],
+      },
+    },
+  });
 }
 
 init();

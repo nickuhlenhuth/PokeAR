@@ -114,6 +114,25 @@ function findBestMatchInText(text) {
   return best;
 }
 
+// Extracts an HP value from OCR'd name-band text. Pokemon cards print HP as
+// e.g. "40 HP", "HP 80", or sometimes "HP80" — try both orders. Returns a
+// number (1-500 range to filter obvious junk) or null.
+function findHPInText(text) {
+  if (!text) return null;
+  const patterns = [
+    /\b(\d{1,3})\s*HP\b/i,
+    /\bHP\s*(\d{1,3})\b/i,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) {
+      const hp = parseInt(m[1], 10);
+      if (hp >= 10 && hp <= 500) return hp;
+    }
+  }
+  return null;
+}
+
 // ---------- Sprite fetch (PokeAPI) ----------
 
 const spriteCache = {};
