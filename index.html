@@ -92,6 +92,30 @@
       border-color: rgba(120, 255, 150, 0.4);
     }
 
+    /* Trainer name badge — fades in once a player sets their name. Sits
+       just above the slot-status label so each player's side reads
+       top-to-bottom: trainer → Pokemon status → sprite. */
+    .slot-trainer {
+      position: absolute;
+      bottom: 59%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.55);
+      padding: 5px 14px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      color: white;
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 5;
+    }
+    .slot-trainer.visible { opacity: 1; }
+    #slot1-trainer { left: 30%; }
+    #slot2-trainer { left: 70%; }
+
     #rotate-warning {
       position: fixed; inset: 0; z-index: 200;
       background: #0a0a0e;
@@ -204,6 +228,8 @@
   </div>
 </div>
 
+<div id="slot1-trainer" class="slot-trainer">—</div>
+<div id="slot2-trainer" class="slot-trainer">—</div>
 <div id="slot1-status" class="slot-status">Waiting for Player 1…</div>
 <div id="slot2-status" class="slot-status">Waiting for Player 2…</div>
 

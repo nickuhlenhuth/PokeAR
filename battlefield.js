@@ -14,6 +14,7 @@ const state = {
     1: { running: false, queued: null },
     2: { running: false, queued: null },
   },
+  playerStates: { 1: null, 2: null }, // last-seen player_state snapshots
 };
 
 function init() {
@@ -38,7 +39,7 @@ function init() {
 
   state.channel
     .on('presence', { event: 'sync' }, handlePresenceSync)
-    .on('broadcast', { event: 'capture' }, handleCaptureBroadcast)
+    .on('broadcast', { event: 'player_state' }, handlePlayerStateBroadcast)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'battlefield' });
@@ -47,15 +48,39 @@ function init() {
     });
 }
 
-// ---------- Capture → animated slot update ----------
+// ---------- Player state → trainer/sprite rendering ----------
 
-function handleCaptureBroadcast({ payload }) {
-  const { player, pokemon } = payload || {};
+function handlePlayerStateBroadcast({ payload }) {
+  const { player, state: newState } = payload || {};
   if (player !== 1 && player !== 2) return;
-  if (!pokemon) return;
+  if (!newState) return;
 
-  console.log(`[battlefield] capture received: Player ${player} → ${pokemon}`);
-  queueSlotUpdate(player, pokemon);
+  const prev = state.playerStates[player];
+  state.playerStates[player] = newState;
+  console.log(`[battlefield] player_state for Player ${player}`, newState);
+
+  // Trainer name changed (or first set)
+  if (!prev || prev.trainerName !== newState.trainerName) {
+    renderTrainerName(player, newState.trainerName);
+  }
+
+  // Active Pokemon changed (or first set)
+  const prevName = prev?.active?.name || null;
+  const newName = newState.active?.name || null;
+  if (newName && prevName !== newName) {
+    queueSlotUpdate(player, newName);
+  }
+}
+
+function renderTrainerName(player, name) {
+  const el = document.getElementById(`slot${player}-trainer`);
+  if (!el) return;
+  if (name) {
+    el.textContent = name;
+    el.classList.add('visible');
+  } else {
+    el.classList.remove('visible');
+  }
 }
 
 function queueSlotUpdate(player, pokemon) {
@@ -316,6 +341,8 @@ function isDemoMode() {
 }
 
 function loadDemoSprites() {
+  renderTrainerName(1, 'Ash');
+  renderTrainerName(2, 'Gary');
   queueSlotUpdate(1, 'pikachu');
   queueSlotUpdate(2, 'charizard');
 }

@@ -35,6 +35,10 @@ Phases:
 3. **Battlefield rendering** — stadium background, sprite slot positioning, landscape lock, QR placement finalized. Use hard-coded sprites to dial in positions.
 4. **Capture + send** — one-shot OCR flow with confirmation, typing fallback with autocomplete, capture broadcasts → iPad renders the sprite (static, no animations yet).
 5. **Animations** — pokeball entrance sequence (drop, bounce, flash, reveal), swap fade-out, sprite idle bob.
-6. **Deploy + end-to-end test** — push to Vercel, test on real iPad + two real iPhones.
+6. **Trainer name + dashboard shell** — trainer name entry after slot assignment, persisted per room in localStorage. Post-assignment UI becomes a dashboard (trainer name + empty ACTIVE + empty BENCH + "Capture new Pokemon" button). Trainer names render per-side on iPad. Migrate from `capture` event to full `player_state` snapshot broadcasts.
+7. **Bench + swap flow** — capture destination picker (active vs bench). Dashboard tile taps for retreat/release/promote. iPad renders thin bench strips along each side.
+8. **HP + attacks + damage animation** — HP OCR with manual override, HP bars under active Pokemon on iPad, `[Attack]` + `[Hurt self]` buttons with a number pad on phone, hit-flash + sprite shake + floating damage number + HP bar animation on battlefield.
+9. **KO animation** — when HP hits 0, battlefield plays flash + backward rotate/fall. Phone prompts to promote from bench or capture new.
+10. **Deploy + end-to-end test** — final QA pass on Vercel production URL with real iPad + two real iPhones through the full Phase 1-9 verification list.
 
 At the end of each phase, explicitly say "Phase N complete — ready for your review" and wait.

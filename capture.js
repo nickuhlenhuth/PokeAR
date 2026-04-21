@@ -1,19 +1,26 @@
-// Capture view (phones). Phase 4: camera + one-shot OCR, typing fallback with
-// autocomplete, and broadcast of the matched Pokemon name to the battlefield.
+// Capture view (phones). Phase 6+: post-assignment the phone becomes a
+// battle dashboard — trainer name, ACTIVE tile, BENCH row, "Capture new
+// Pokemon" button. The phone is the source of truth for its own player and
+// broadcasts `player_state` snapshots for the battlefield to render.
 
 const state = {
   roomId: null,
   clientId: null,
   channel: null,
   client: null,
-  player: null,                 // 1 | 2 | null once assigned
-  stage: 'status',              // 'status' | 'camera' | 'confirm' | 'typing'
+  player: null,                 // 1 | 2 | null
+  stage: 'status',              // 'status' | 'trainer' | 'dashboard' | 'camera' | 'confirm' | 'typing'
   video: null,
   nameBandCanvas: null,
   tesseractWorker: null,
   tesseractReady: false,
   cameraStream: null,
-  lastCapture: null,            // { name, spriteUrl } from OCR
+  lastCapture: null,
+  playerState: {                // own-player state (authoritative)
+    trainerName: null,
+    active: null,               // { name, hp, maxHp } or null
+    bench: [null, null, null, null, null],
+  },
 };
 
 function init() {
@@ -21,6 +28,7 @@ function init() {
   state.roomId = params.get('room');
   document.getElementById('room-code-value').textContent = state.roomId || '—';
   document.getElementById('room-small').textContent = state.roomId || '—';
+  document.getElementById('trainer-room-code').textContent = state.roomId || '—';
 
   if (!state.roomId) {
     setStatus('error', 'No room code', 'Scan the QR code on the battlefield iPad to join.');
@@ -35,7 +43,6 @@ function init() {
   state.video = document.getElementById('video');
   state.nameBandCanvas = document.createElement('canvas');
 
-  // Start loading the Pokemon list now so it's ready before any capture attempt.
   ensurePokemonListLoaded();
 
   state.clientId = getOrCreateClientId(state.roomId);
@@ -56,25 +63,41 @@ function init() {
 }
 
 function wireButtons() {
-  document.getElementById('start-camera-btn').addEventListener('click', onStartCamera);
+  // Trainer stage
+  const trainerInput = document.getElementById('trainer-name-input');
+  trainerInput.addEventListener('input', (e) => {
+    document.getElementById('trainer-submit').disabled = !e.target.value.trim();
+  });
+  trainerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.value.trim()) onTrainerSubmit();
+  });
+  document.getElementById('trainer-submit').addEventListener('click', onTrainerSubmit);
+
+  // Dashboard
+  document.getElementById('dashboard-edit-name').addEventListener('click', onEditName);
+  document.getElementById('capture-new-btn').addEventListener('click', onCaptureNew);
+  document.getElementById('type-new-btn').addEventListener('click', () => showStage('typing'));
+
+  // Camera
   document.getElementById('capture-btn').addEventListener('click', onCapture);
   document.getElementById('type-btn').addEventListener('click', () => showStage('typing'));
+
+  // Confirm
   document.getElementById('confirm-yes').addEventListener('click', onConfirmYes);
   document.getElementById('confirm-no').addEventListener('click', onConfirmNo);
   document.getElementById('confirm-type').addEventListener('click', () => showStage('typing'));
+
+  // Typing
   document.getElementById('typing-back').addEventListener('click', onTypingBack);
   document.getElementById('typing-send').addEventListener('click', onTypingSend);
-
   const input = document.getElementById('type-input');
   input.addEventListener('input', onTypeInput);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !document.getElementById('typing-send').disabled) {
-      onTypingSend();
-    }
+    if (e.key === 'Enter' && !document.getElementById('typing-send').disabled) onTypingSend();
   });
 }
 
-// ---------- Assignment ----------
+// ---------- Assignment + trainer ----------
 
 function handleAssignBroadcast({ payload }) {
   if (payload.to !== state.clientId) return;
@@ -85,10 +108,67 @@ function handleAssignBroadcast({ payload }) {
     return;
   }
 
-  setStatus('assigned', `You are Player ${payload.player}`, 'Tap to enable your camera.');
-  document.getElementById('start-camera-btn').style.display = 'inline-block';
+  document.getElementById('trainer-player-number').textContent = payload.player;
+  document.getElementById('dashboard-player-tag').textContent = `Player ${payload.player}`;
   document.getElementById('player-badge').textContent = `Player ${payload.player}`;
   console.log(`[capture] assigned to Player ${payload.player}`);
+
+  // Fast-path: if this room has a remembered trainer name, skip the entry
+  // stage and go straight to the dashboard.
+  const savedName = loadTrainerName(state.roomId);
+  if (savedName) {
+    state.playerState.trainerName = savedName;
+    renderDashboardTrainer();
+    broadcastPlayerState();
+    showStage('dashboard');
+  } else {
+    showStage('trainer');
+    setTimeout(() => document.getElementById('trainer-name-input').focus(), 100);
+  }
+}
+
+function onTrainerSubmit() {
+  const name = document.getElementById('trainer-name-input').value.trim();
+  if (!name) return;
+  state.playerState.trainerName = name;
+  saveTrainerName(state.roomId, name);
+  renderDashboardTrainer();
+  broadcastPlayerState();
+  showStage('dashboard');
+}
+
+function onEditName() {
+  const input = document.getElementById('trainer-name-input');
+  input.value = state.playerState.trainerName || '';
+  document.getElementById('trainer-submit').disabled = !input.value.trim();
+  showStage('trainer');
+  setTimeout(() => input.focus(), 100);
+}
+
+// ---------- Capture entry points (from dashboard) ----------
+
+async function onCaptureNew() {
+  if (!state.cameraStream) {
+    try {
+      await startCamera();
+    } catch (e) {
+      console.error('[capture] camera error', e);
+      alert(`Camera unavailable: ${e.message}\nUse "Type name instead".`);
+      return;
+    }
+  }
+  showStage('camera');
+  ensureTesseractWorker();
+}
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false,
+  });
+  state.cameraStream = stream;
+  state.video.srcObject = stream;
+  await state.video.play();
 }
 
 // ---------- Pokemon list + Tesseract loading ----------
@@ -119,34 +199,14 @@ async function ensureTesseractWorker() {
     state.tesseractWorker = await Tesseract.createWorker('eng');
     await state.tesseractWorker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz \'',
-      // PSM 6 = "single uniform block of text". The name band usually contains
-      // two lines ("Basic Pokémon" subtitle + the actual Pokemon name), which
-      // PSM 7 ("single line") can't handle and silently returns empty on.
+      // PSM 6 = "single uniform block of text" — handles the multi-line
+      // ("Basic Pokémon" subtitle + name) name band better than PSM 7.
       tessedit_pageseg_mode: '6',
     });
     state.tesseractReady = true;
     console.log('[capture] Tesseract ready');
   } catch (e) {
     console.error('[capture] Tesseract init failed', e);
-  }
-}
-
-// ---------- Camera ----------
-
-async function onStartCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
-    state.cameraStream = stream;
-    state.video.srcObject = stream;
-    await state.video.play();
-    showStage('camera');
-    ensureTesseractWorker();
-  } catch (e) {
-    console.error('[capture] camera error', e);
-    setStatus('error', 'Camera unavailable', `${e.message}. You can still use "Type name instead" via the camera screen after retry — or try a different browser.`);
   }
 }
 
@@ -176,7 +236,6 @@ async function onCapture() {
   try {
     const result = await runOCRFromVideo();
     hideCameraMsg();
-
     console.log('[capture] OCR reads:', result.reads);
 
     if (!result.match) {
@@ -197,15 +256,11 @@ async function onCapture() {
   }
 }
 
-// Crop the card-guide region out of the current video frame, isolate the top
-// 14% (name band), run two threshold variants through Tesseract, return the
-// best match.
 async function runOCRFromVideo() {
   const video = state.video;
   const guideRect = document.getElementById('card-guide').getBoundingClientRect();
   const stageRect = video.getBoundingClientRect();
 
-  // video has object-fit: cover — compute the actual displayed video rect.
   const vAspect = video.videoWidth / video.videoHeight;
   const dAspect = stageRect.width / stageRect.height;
   let dispW, dispH, offX, offY;
@@ -224,7 +279,7 @@ async function runOCRFromVideo() {
   const vy = Math.max(0, (guideLocalY - offY) * sy);
   const vw = Math.min(video.videoWidth - vx, guideRect.width * sx);
   const vh = Math.min(video.videoHeight - vy, guideRect.height * sy);
-  if (vw < 50 || vh < 50) return null;
+  if (vw < 50 || vh < 50) return { match: null, reads: [] };
 
   const nameX = vx + vw * 0.03;
   const nameY = vy + vh * 0.03;
@@ -291,17 +346,19 @@ function showConfirmError(msg) {
   showStage('confirm');
 }
 
-async function onConfirmYes() {
+function onConfirmYes() {
   if (!state.lastCapture?.name) { onConfirmNo(); return; }
   const name = state.lastCapture.name;
-  await sendCapture(name);
+  setActivePokemon(name);
   state.lastCapture = null;
-  returnToCamera(`Sent: ${prettifyName(name)}`);
+  showStage('dashboard');
 }
 
 function onConfirmNo() {
   state.lastCapture = null;
-  returnToCamera();
+  // Return to wherever we came from — if the camera stream is live, back to
+  // camera; otherwise typing.
+  showStage(state.cameraStream ? 'camera' : 'typing');
 }
 
 // ---------- Typing stage ----------
@@ -331,49 +388,76 @@ function onTypeInput(e) {
   }, 180);
 }
 
-async function onTypingSend() {
+function onTypingSend() {
   const name = document.getElementById('type-input').value.toLowerCase().trim();
   if (!name || !pokemonNameSet?.has(name)) return;
-  await sendCapture(name);
+  setActivePokemon(name);
   document.getElementById('type-input').value = '';
   document.getElementById('type-preview').textContent = 'Start typing…';
   document.getElementById('typing-send').disabled = true;
-  returnToCamera(`Sent: ${prettifyName(name)}`);
+  showStage('dashboard');
 }
 
 function onTypingBack() {
-  returnToCamera();
+  showStage('dashboard');
 }
 
-// ---------- Broadcast ----------
+// ---------- State + broadcast ----------
 
-async function sendCapture(pokemonName) {
+function setActivePokemon(name) {
+  // Phase 6: HP fields stay null until Phase 8 adds HP tracking.
+  state.playerState.active = { name, hp: null, maxHp: null };
+  broadcastPlayerState();
+  renderDashboardActive();
+}
+
+async function broadcastPlayerState() {
+  if (!state.channel || !state.player) return;
   await state.channel.send({
     type: 'broadcast',
-    event: 'capture',
-    payload: { player: state.player, pokemon: pokemonName, roomId: state.roomId },
+    event: 'player_state',
+    payload: { player: state.player, state: state.playerState, roomId: state.roomId },
   });
-  console.log(`[capture] sent: Player ${state.player} → ${pokemonName}`);
+  console.log(`[capture] player_state for Player ${state.player}`, state.playerState);
+}
+
+// ---------- Dashboard rendering ----------
+
+function renderDashboardTrainer() {
+  document.getElementById('dashboard-trainer-name').textContent =
+    state.playerState.trainerName || '—';
+}
+
+async function renderDashboardActive() {
+  const tile = document.getElementById('active-tile');
+  if (!state.playerState.active) {
+    tile.classList.add('active-empty');
+    tile.classList.remove('active-filled');
+    tile.innerHTML = '<div class="active-placeholder">No active Pokemon yet. Tap "Capture new Pokemon" below to send one in.</div>';
+    return;
+  }
+  const name = state.playerState.active.name;
+  const url = await getSpriteFor(name);
+  tile.classList.remove('active-empty');
+  tile.classList.add('active-filled');
+  tile.innerHTML = `
+    <img class="active-sprite" src="${url || ''}" alt="" />
+    <div>
+      <div class="active-name">${prettifyName(name)}</div>
+      <div class="active-note">Active Pokemon</div>
+    </div>
+  `;
 }
 
 // ---------- UI helpers ----------
 
 function showStage(name) {
   state.stage = name;
-  for (const id of ['status-stage', 'camera-stage', 'confirm-stage', 'typing-stage']) {
+  for (const id of ['status-stage', 'trainer-stage', 'dashboard-stage', 'camera-stage', 'confirm-stage', 'typing-stage']) {
     document.getElementById(id).classList.toggle('active', id === `${name}-stage`);
   }
   if (name === 'typing') {
     setTimeout(() => document.getElementById('type-input').focus(), 100);
-  }
-}
-
-function returnToCamera(sentMsg) {
-  if (state.cameraStream) {
-    showStage('camera');
-    if (sentMsg) showSentBanner(sentMsg);
-  } else {
-    showStage('status');
   }
 }
 
@@ -384,15 +468,6 @@ function showCameraMsg(msg) {
 }
 function hideCameraMsg() {
   document.getElementById('camera-msg').style.display = 'none';
-}
-
-function showSentBanner(msg) {
-  const b = document.getElementById('last-sent-banner');
-  b.textContent = msg;
-  b.classList.remove('show');
-  void b.offsetWidth; // force reflow so the animation re-triggers
-  b.classList.add('show');
-  setTimeout(() => b.classList.remove('show'), 2500);
 }
 
 function setStatus(kind, headline, detail) {
@@ -406,6 +481,8 @@ function setStatus(kind, headline, detail) {
   document.getElementById('status-detail').textContent = detail;
 }
 
+// ---------- localStorage ----------
+
 function getOrCreateClientId(roomId) {
   const key = `pokebattle.clientId.${roomId}`;
   try {
@@ -417,6 +494,19 @@ function getOrCreateClientId(roomId) {
     return id;
   } catch {
     return generateClientId();
+  }
+}
+
+function saveTrainerName(roomId, name) {
+  try {
+    localStorage.setItem(`pokebattle.trainer.${roomId}`, name);
+  } catch {}
+}
+function loadTrainerName(roomId) {
+  try {
+    return localStorage.getItem(`pokebattle.trainer.${roomId}`);
+  } catch {
+    return null;
   }
 }
 
