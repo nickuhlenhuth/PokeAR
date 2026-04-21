@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Pokémon Card AR v6</title>
+  <title>Pokémon Card AR v8</title>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window._cvReady=true"></script>
@@ -20,11 +20,19 @@
 
     #debugStrip {
       position: fixed; bottom: 12px; right: 12px; z-index: 30;
-      width: 180px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      width: 200px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
       background: rgba(0,0,0,0.6); display: none;
     }
     #debugStrip canvas { display: block; width: 100%; }
     #debugStrip .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
+
+    #edgePreview {
+      position: fixed; bottom: 12px; right: 220px; z-index: 30;
+      width: 140px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      background: rgba(0,0,0,0.6); display: none;
+    }
+    #edgePreview canvas { display: block; width: 100%; }
+    #edgePreview .lbl { font-size: 10px; color: #aaa; padding: 3px 6px; }
 
     #startGate {
       position: fixed; inset: 0; z-index: 100;
@@ -55,15 +63,15 @@
       background: rgba(0,0,0,0.65); padding: 10px 14px; border-radius: 10px;
       font-size: 11px; backdrop-filter: blur(8px);
       font-family: ui-monospace, Menlo, monospace;
-      max-width: calc(100% - 210px);
+      max-width: calc(100% - 380px);
     }
   </style>
 </head>
 <body>
 
 <div id="startGate">
-  <h1>🔮 Pokémon Card AR</h1>
-  <p>Hold a card in view. Yellow traces the card, blue shows the OCR region.</p>
+  <h1>🔮 Pokémon Card AR v8</h1>
+  <p>Aggressive binarization for reliable OCR on card names.</p>
   <button id="startBtn">Start Camera</button>
 </div>
 
@@ -72,8 +80,13 @@
   <canvas id="overlay"></canvas>
 </div>
 
+<div id="edgePreview">
+  <div class="lbl">Edges:</div>
+  <canvas id="edgeCanvas"></canvas>
+</div>
+
 <div id="debugStrip">
-  <div class="lbl">OCR view (top half of card):</div>
+  <div class="lbl">OCR input (binarized):</div>
   <canvas id="debugCanvas"></canvas>
 </div>
 
@@ -93,11 +106,16 @@
   const debugStrip = document.getElementById('debugStrip');
   const debugCanvas = document.getElementById('debugCanvas');
   const debugCtx = debugCanvas.getContext('2d');
+  const edgePreview = document.getElementById('edgePreview');
+  const edgeCanvas = document.getElementById('edgeCanvas');
+  const edgeCtx = edgeCanvas.getContext('2d');
 
   const frameCanvas = document.createElement('canvas');
   const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
-  const ocrCanvas = document.createElement('canvas');
-  const ocrCtx = ocrCanvas.getContext('2d');
+  const warpCanvas = document.createElement('canvas');  // perspective-corrected top half (color)
+  const ocrCanvasA = document.createElement('canvas');  // binarized variant A
+  const ocrCanvasB = document.createElement('canvas');  // binarized variant B (inverted)
+  const ocrCanvasC = document.createElement('canvas');  // plain grayscale contrast-stretched
 
   let worker = null;
   let current = null;
@@ -106,13 +124,20 @@
   let ocrRunning = false;
   let detectedQuad = null;
   let ocrQuad = null;
-  let debugCandidates = [];     // all scored quad candidates (for debug overlay)
+  let debugCandidates = [];
+  let debugStats = {};
   let debugMode = false;
+
+  // Smoothing: remember last good quad for a few frames so transient misses don't drop it
+  let lastGoodQuad = null;
+  let framesSinceGoodQuad = 0;
+  const MAX_MISSED_FRAMES = 3;
 
   debugToggle.addEventListener('click', () => {
     debugMode = !debugMode;
     debugToggle.textContent = debugMode ? 'Debug ON' : 'Debug OFF';
     debugToggle.classList.toggle('on', debugMode);
+    edgePreview.style.display = debugMode ? 'block' : 'none';
   });
 
   async function loadPokemonList() {
@@ -139,7 +164,7 @@
     if (cleaned.length < 4) return null;
     if (pokemonNameSet.has(cleaned)) return { name: cleaned, dist: 0 };
     let best = null, bestDist = Infinity;
-    const maxDist = Math.max(1, Math.floor(cleaned.length * 0.25));
+    const maxDist = Math.max(1, Math.floor(cleaned.length * 0.3));  // slightly more lenient
     for (const name of pokemonNameSet) {
       if (Math.abs(name.length - cleaned.length) > maxDist) continue;
       const d = editDistance(cleaned, name);
@@ -181,13 +206,48 @@
     return [tl, tr, br, bl];
   }
 
-  // --- Improved card detector with scoring ---
-  // We score each candidate quad by:
-  //   - rectangularity (contour area / bounding rect area)
-  //   - aspect ratio closeness to 0.716 (or 1/0.716)
-  //   - relative size (prefer middle-large, not tiny or whole frame)
-  // Also, we use RETR_LIST so we see nested contours, and we run Canny with
-  // adaptive thresholds based on image statistics.
+  function polygonArea(pts) {
+    let area = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      area += pts[i].x * pts[j].y;
+      area -= pts[j].x * pts[i].y;
+    }
+    return Math.abs(area / 2);
+  }
+
+  function scoreQuad(quad, frameArea) {
+    const [tl, tr, br, bl] = quad;
+    const wTop = dist(tl, tr), wBot = dist(bl, br);
+    const hLef = dist(tl, bl), hRig = dist(tr, br);
+    const avgW = (wTop + wBot) / 2, avgH = (hLef + hRig) / 2;
+    if (avgW < 15 || avgH < 15) return null;
+    const ratio = avgW / avgH;
+    const aspectErr = Math.min(
+      Math.abs(ratio - 0.716) / 0.716,
+      Math.abs(ratio - 1/0.716) / (1/0.716)
+    );
+    if (aspectErr > 0.5) return null;
+
+    const qArea = polygonArea(quad);
+    const xs = quad.map(p => p.x), ys = quad.map(p => p.y);
+    const bboxArea = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    const rectangularity = bboxArea > 0 ? qArea / bboxArea : 0;
+    if (rectangularity < 0.55) return null;
+
+    const symTB = Math.min(wTop, wBot) / Math.max(wTop, wBot);
+    const symLR = Math.min(hLef, hRig) / Math.max(hLef, hRig);
+    if (symTB < 0.5 || symLR < 0.5) return null;
+
+    const areaFrac = qArea / frameArea;
+    if (areaFrac < 0.04 || areaFrac > 0.92) return null;
+
+    const sizeScore = 1 - Math.abs(areaFrac - 0.35);
+    const score = (1 - aspectErr) * 2.5 + rectangularity * 2.0
+                + symTB * 0.6 + symLR * 0.6 + Math.max(0, sizeScore) * 1.0;
+    return { score, aspectErr, rectangularity, areaFrac, symTB, symLR };
+  }
+
   function detectCardQuad() {
     if (!window.cv || !window._cvReady) return null;
     const scale = 0.4;
@@ -204,116 +264,77 @@
     const dilated = new cv.Mat();
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
-
     const candidates = [];
+    const stats = { contoursFound: 0, approxPassed: 0, minAreaRectPassed: 0 };
 
     try {
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-
-      // Adaptive Canny thresholds from median of blurred image
       const mean = cv.mean(blurred)[0];
-      const lo = Math.max(0, Math.floor(mean * 0.5));
-      const hi = Math.min(255, Math.floor(mean * 1.2));
-      cv.Canny(blurred, edges, lo, hi);
-
-      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      cv.Canny(blurred, edges, Math.max(10, Math.floor(mean * 0.45)), Math.min(255, Math.floor(mean * 1.3)));
+      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
       cv.dilate(edges, dilated, kernel);
       kernel.delete();
 
-      // RETR_LIST so we pick up nested contours (the card inside a sleeve
-      // can be nested in the sleeve's outer contour).
-      cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      if (debugMode) {
+        edgeCanvas.width = w; edgeCanvas.height = h;
+        cv.imshow(edgeCanvas, dilated);
+      }
 
+      cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      stats.contoursFound = contours.size();
       const frameArea = w * h;
-      const minArea = frameArea * 0.05;
-      const maxArea = frameArea * 0.90;
+      const minArea = frameArea * 0.04, maxArea = frameArea * 0.95;
 
       for (let i = 0; i < contours.size(); i++) {
         const cnt = contours.get(i);
         const area = cv.contourArea(cnt);
         if (area < minArea || area > maxArea) { cnt.delete(); continue; }
 
-        // Try multiple epsilon values — some quads need a looser approx
-        for (const eps of [0.015, 0.025, 0.04]) {
+        let approxedQuad = null;
+        for (const eps of [0.02, 0.03, 0.045, 0.06]) {
           const peri = cv.arcLength(cnt, true);
           const approx = new cv.Mat();
           cv.approxPolyDP(cnt, approx, eps * peri, true);
-
           if (approx.rows === 4 && cv.isContourConvex(approx)) {
             const pts = [];
             for (let j = 0; j < 4; j++) {
               pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
             }
-            const ordered = orderQuadCorners(pts);
-            const wTop = dist(ordered[0], ordered[1]);
-            const wBot = dist(ordered[3], ordered[2]);
-            const hLef = dist(ordered[0], ordered[3]);
-            const hRig = dist(ordered[1], ordered[2]);
-            const avgW = (wTop + wBot) / 2;
-            const avgH = (hLef + hRig) / 2;
-            const ratio = avgW / avgH;
-
-            // Reject degenerate shapes
-            if (avgW < 20 || avgH < 20) { approx.delete(); continue; }
-
-            // Aspect ratio score — how close to portrait 0.716 or landscape 1.395
-            const targetPortrait = 0.716;
-            const targetLandscape = 1 / 0.716;
-            const distPortrait = Math.abs(ratio - targetPortrait) / targetPortrait;
-            const distLandscape = Math.abs(ratio - targetLandscape) / targetLandscape;
-            const aspectErr = Math.min(distPortrait, distLandscape);
-            if (aspectErr > 0.45) { approx.delete(); continue; }  // too non-card-shaped
-
-            // Rectangularity: quad area vs. its axis-aligned bounding rect area
-            // For a true rectangle (no perspective), this is ~1.0. With perspective it
-            // can be lower but a convex quad should still be > 0.6 or so.
-            const quadArea = Math.abs(
-              (ordered[0].x * (ordered[1].y - ordered[3].y) +
-               ordered[1].x * (ordered[2].y - ordered[0].y) +
-               ordered[2].x * (ordered[3].y - ordered[1].y) +
-               ordered[3].x * (ordered[0].y - ordered[2].y)) / 2
-            );
-            const xs = ordered.map(p => p.x), ys = ordered.map(p => p.y);
-            const bboxArea = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-            const rectangularity = bboxArea > 0 ? quadArea / bboxArea : 0;
-            if (rectangularity < 0.60) { approx.delete(); continue; }
-
-            // Side-pair symmetry: opposite sides should be similar length
-            const symTopBot = Math.min(wTop, wBot) / Math.max(wTop, wBot);
-            const symLefRig = Math.min(hLef, hRig) / Math.max(hLef, hRig);
-            if (symTopBot < 0.55 || symLefRig < 0.55) { approx.delete(); continue; }
-
-            // Size preference: favor ~30% of frame, penalize too small or too huge
-            const areaFrac = quadArea / frameArea;
-            const sizeScore = 1 - Math.abs(areaFrac - 0.30);  // 1.0 when 30%, lower otherwise
-
-            // Combined score (higher is better)
-            const score = (1 - aspectErr) * 2.0
-                        + rectangularity * 1.5
-                        + symTopBot * 0.5
-                        + symLefRig * 0.5
-                        + Math.max(0, sizeScore) * 1.0;
-
-            candidates.push({
-              quad: ordered.map(p => ({ x: p.x / scale, y: p.y / scale })),
-              score,
-              aspectErr,
-              rectangularity,
-              areaFrac,
-              epsUsed: eps
-            });
+            approxedQuad = orderQuadCorners(pts);
+            stats.approxPassed++;
             approx.delete();
-            break;  // take first successful eps for this contour
+            break;
           }
           approx.delete();
+        }
+        if (approxedQuad) {
+          const s = scoreQuad(approxedQuad, frameArea);
+          if (s) candidates.push({ quad: approxedQuad.map(p => ({ x: p.x / scale, y: p.y / scale })), source: 'approx', ...s });
+        }
+
+        const rotRect = cv.minAreaRect(cnt);
+        const boxPts = cv.RotatedRect.points(rotRect);
+        const ordered = orderQuadCorners(boxPts);
+        const rectArea = rotRect.size.width * rotRect.size.height;
+        const fillRatio = rectArea > 0 ? area / rectArea : 0;
+        if (fillRatio >= 0.72) {
+          const s = scoreQuad(ordered, frameArea);
+          if (s) {
+            stats.minAreaRectPassed++;
+            candidates.push({
+              quad: ordered.map(p => ({ x: p.x / scale, y: p.y / scale })),
+              source: `mar(${fillRatio.toFixed(2)})`,
+              fillRatio, ...s
+            });
+          }
         }
         cnt.delete();
       }
 
-      // Sort by score desc
       candidates.sort((a, b) => b.score - a.score);
       debugCandidates = candidates.slice(0, 8);
+      debugStats = stats;
       return candidates.length > 0 ? candidates[0].quad : null;
     } finally {
       src.delete(); gray.delete(); blurred.delete(); edges.delete();
@@ -347,17 +368,10 @@
   function warpQuadToCanvas(quad, outCanvas, outW, outH) {
     const src = cv.imread(frameCanvas);
     const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      quad[0].x, quad[0].y,
-      quad[1].x, quad[1].y,
-      quad[2].x, quad[2].y,
-      quad[3].x, quad[3].y
+      quad[0].x, quad[0].y, quad[1].x, quad[1].y,
+      quad[2].x, quad[2].y, quad[3].x, quad[3].y
     ]);
-    const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      0, 0,
-      outW, 0,
-      outW, outH,
-      0, outH
-    ]);
+    const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
     const M = cv.getPerspectiveTransform(srcPts, dstPts);
     const dst = new cv.Mat();
     cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
@@ -365,6 +379,66 @@
     outCanvas.height = outH;
     cv.imshow(outCanvas, dst);
     src.delete(); srcPts.delete(); dstPts.delete(); M.delete(); dst.delete();
+  }
+
+  // --- Crop just the NAME band from the warped top-half ---
+  // Top half = ~50% of card height. Name is in the upper 30-50% of that, i.e.
+  // the upper ~15-25% of the original card. We want just that strip for OCR.
+  function cropNameBand(warpedTopHalfCanvas) {
+    const w = warpedTopHalfCanvas.width;
+    const h = warpedTopHalfCanvas.height;
+    // Name band: top 55% vertically, left 70% horizontally (skip HP on right)
+    const nameW = Math.floor(w * 0.70);
+    const nameH = Math.floor(h * 0.55);
+    const nameX = 0;
+    const nameY = 0;
+
+    const cropped = document.createElement('canvas');
+    cropped.width = nameW;
+    cropped.height = nameH;
+    cropped.getContext('2d').drawImage(warpedTopHalfCanvas, nameX, nameY, nameW, nameH, 0, 0, nameW, nameH);
+    return cropped;
+  }
+
+  // --- Produce multiple OCR-ready versions of the name band ---
+  // Returns three canvases: Otsu binarized, inverted binarized, contrast-stretched grayscale.
+  function makeOCRVariants(nameCanvas) {
+    const src = cv.imread(nameCanvas);
+    const gray = new cv.Mat();
+    const upscaled = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    // Upscale 3x for better OCR of small text
+    const newSize = new cv.Size(gray.cols * 3, gray.rows * 3);
+    cv.resize(gray, upscaled, newSize, 0, 0, cv.INTER_CUBIC);
+
+    // Variant A: Otsu's threshold — auto-picks best binarization threshold
+    const binA = new cv.Mat();
+    cv.threshold(upscaled, binA, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    ocrCanvasA.width = binA.cols; ocrCanvasA.height = binA.rows;
+    cv.imshow(ocrCanvasA, binA);
+
+    // Variant B: Inverted Otsu (for light text on dark backgrounds)
+    const binB = new cv.Mat();
+    cv.threshold(upscaled, binB, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    ocrCanvasB.width = binB.cols; ocrCanvasB.height = binB.rows;
+    cv.imshow(ocrCanvasB, binB);
+
+    // Variant C: Contrast-stretched grayscale (preserves nuance)
+    const stretched = new cv.Mat();
+    cv.normalize(upscaled, stretched, 0, 255, cv.NORM_MINMAX);
+    ocrCanvasC.width = stretched.cols; ocrCanvasC.height = stretched.rows;
+    cv.imshow(ocrCanvasC, stretched);
+
+    src.delete(); gray.delete(); upscaled.delete();
+    binA.delete(); binB.delete(); stretched.delete();
+
+    return [
+      { canvas: ocrCanvasA, label: 'otsu' },
+      { canvas: ocrCanvasB, label: 'otsu-inv' },
+      { canvas: ocrCanvasC, label: 'stretched' }
+    ];
   }
 
   async function waitForOpenCV() {
@@ -400,15 +474,17 @@
       await loadPokemonList();
 
       worker = await Tesseract.createWorker('eng');
+      // PSM 7 = single line of text. Much better for card names than default.
       await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ',
+        tessedit_pageseg_mode: '7'
       });
 
       statusEl.textContent = 'Ready — show me a card 🎯';
       resizeOverlay();
       window.addEventListener('resize', resizeOverlay);
       requestAnimationFrame(renderLoop);
-      setInterval(processFrame, 600);
+      setInterval(processFrame, 700);
     } catch (e) {
       alert('Failed: ' + e.message);
       startBtn.disabled = false;
@@ -431,12 +507,24 @@
       frameCanvas.height = video.videoHeight;
       frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
 
-      const quad = detectCardQuad();
+      let quad = detectCardQuad();
+
+      // Temporal smoothing: if we miss a frame but had a good quad recently, use it
+      if (quad) {
+        lastGoodQuad = quad;
+        framesSinceGoodQuad = 0;
+      } else if (lastGoodQuad && framesSinceGoodQuad < MAX_MISSED_FRAMES) {
+        quad = lastGoodQuad;
+        framesSinceGoodQuad++;
+      } else {
+        lastGoodQuad = null;
+      }
 
       if (!quad) {
         detectedQuad = null;
         ocrQuad = null;
-        detectedEl.textContent = 'No card detected';
+        const s = debugStats;
+        detectedEl.textContent = `no quad | contours=${s.contoursFound} ap=${s.approxPassed} mar=${s.minAreaRectPassed}`;
         return;
       }
 
@@ -444,34 +532,40 @@
       const topHalf = computeTopHalfQuad(quad);
       ocrQuad = topHalf;
 
-      const outW = 600;
-      const outH = 220;
-      warpQuadToCanvas(topHalf, ocrCanvas, outW, outH);
+      // Warp top half to a flat canvas
+      warpQuadToCanvas(topHalf, warpCanvas, 600, 220);
+      // Crop to just the name band
+      const nameBand = cropNameBand(warpCanvas);
+      // Build 3 OCR-ready variants
+      const variants = makeOCRVariants(nameBand);
 
-      const imgData = ocrCtx.getImageData(0, 0, outW, outH);
-      const d = imgData.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const l = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-        const boosted = l < 128 ? Math.max(0, l - 15) : Math.min(255, l + 15);
-        d[i] = d[i+1] = d[i+2] = boosted;
-      }
-      ocrCtx.putImageData(imgData, 0, 0);
-
-      debugCanvas.width = outW;
-      debugCanvas.height = outH;
-      debugCtx.drawImage(ocrCanvas, 0, 0);
-
-      const { data } = await worker.recognize(ocrCanvas);
-      const words = (data.words || []).filter(w => w.confidence > 40);
-
+      // Run OCR on all variants, collect matches
       let best = null;
-      for (const w of words) {
-        if (!w.text) continue;
-        const m = findBestMatch(w.text);
-        if (m && (!best || m.dist < best.match.dist || (m.dist === best.match.dist && w.confidence > best.conf))) {
-          best = { match: m, word: w, conf: w.confidence };
+      let rawReads = [];
+      for (const v of variants) {
+        const { data } = await worker.recognize(v.canvas);
+        const text = (data.text || '').trim();
+        rawReads.push(`${v.label}:"${text}"`);
+        // First try the whole line as a single token
+        const m = findBestMatch(text);
+        if (m && (!best || m.dist < best.match.dist)) {
+          best = { match: m, raw: text, variant: v.label, conf: data.confidence || 0 };
+        }
+        // Also scan individual words (in case there are multiple)
+        for (const w of (data.words || [])) {
+          if (!w.text || w.confidence < 30) continue;
+          const mm = findBestMatch(w.text);
+          if (mm && (!best || mm.dist < best.match.dist)) {
+            best = { match: mm, raw: w.text, variant: v.label, conf: w.confidence };
+          }
         }
       }
+
+      // Show the best-looking variant in the debug preview
+      const showVariant = variants.find(v => v.label === (best?.variant || 'otsu'));
+      debugCanvas.width = showVariant.canvas.width;
+      debugCanvas.height = showVariant.canvas.height;
+      debugCtx.drawImage(showVariant.canvas, 0, 0);
 
       if (best) {
         if (!current || current.name !== best.match.name) {
@@ -482,9 +576,9 @@
           current.quad = detectedQuad;
           current.lastSeen = Date.now();
         }
-        detectedEl.textContent = `${best.match.name} | raw="${best.word.text}" conf=${Math.round(best.conf)}`;
+        detectedEl.textContent = `${best.match.name} | "${best.raw}" [${best.variant} d=${best.match.dist}]`;
       } else {
-        detectedEl.textContent = `card found | no match: ${words.slice(0,4).map(w=>w.text).join(', ')}`;
+        detectedEl.textContent = `card found | ${rawReads.join(' ')}`;
         if (current) current.quad = detectedQuad;
       }
     } catch (e) {
@@ -528,37 +622,19 @@
     }
     const toScreen = (x, y) => ({ x: offX + x * (dispW / video.videoWidth), y: offY + y * (dispH / video.videoHeight) });
 
-    // In debug mode, show ALL candidates with scores
     if (debugMode) {
       for (let i = 0; i < debugCandidates.length; i++) {
         const c = debugCandidates[i];
-        const alpha = 0.3 + 0.7 * (1 - i / debugCandidates.length);
+        const alpha = 0.35 + 0.55 * (1 - i / debugCandidates.length);
         drawQuad(c.quad, `rgba(255,100,255,${alpha})`, 1.5, toScreen);
-        // Label with score
-        const center = toScreen(
-          (c.quad[0].x + c.quad[2].x) / 2,
-          (c.quad[0].y + c.quad[2].y) / 2
-        );
-        ctx.save();
-        ctx.fillStyle = `rgba(255,100,255,${alpha})`;
-        ctx.font = '11px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(`#${i+1} s=${c.score.toFixed(2)}`, center.x, center.y);
-        ctx.restore();
       }
     }
 
-    if (detectedQuad) {
-      drawQuad(detectedQuad, 'rgba(255,203,5,0.95)', 6, toScreen);
-    }
-    if (ocrQuad) {
-      drawQuad(ocrQuad, 'rgba(59,130,246,0.95)', 4, toScreen);
-    }
+    if (detectedQuad) drawQuad(detectedQuad, 'rgba(255,203,5,0.95)', 6, toScreen);
+    if (ocrQuad) drawQuad(ocrQuad, 'rgba(59,130,246,0.95)', 4, toScreen);
 
-    // Sprite
     if (current && current.img) {
       let anchorX, anchorY, cardScreenH;
-
       if (current.quad && detectedQuad) {
         const top = computeTopHalfQuad(current.quad);
         const tl = toScreen(top[0].x, top[0].y);
@@ -575,9 +651,7 @@
         anchorY = current.lastAnchor.y;
         cardScreenH = current.lastAnchor.cardScreenH;
       } else {
-        anchorX = w / 2;
-        anchorY = h / 2;
-        cardScreenH = 300;
+        anchorX = w / 2; anchorY = h / 2; cardScreenH = 300;
       }
 
       const spriteH = Math.max(140, cardScreenH * 0.75);
