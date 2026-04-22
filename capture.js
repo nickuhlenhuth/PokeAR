@@ -18,6 +18,7 @@ const state = {
   lastCapture: null,
   pendingDestination: null,     // { type: 'active' } | { type: 'bench', slot } | null
   damageMode: null,             // 'attack' | 'heal' | 'take' while modal is open
+  damageTarget: null,           // { type: 'active' } | { type: 'bench', slot } while modal is open
   playerState: {                // own-player state (authoritative)
     trainerName: null,
     avatarId: null,             // Showdown trainer sprite id (see TRAINER_AVATARS)
@@ -57,6 +58,7 @@ function init() {
   state.channel
     .on('broadcast', { event: 'assign' }, handleAssignBroadcast)
     .on('broadcast', { event: 'attack_effect' }, handleAttackEffectBroadcast)
+    .on('broadcast', { event: 'voice_command' }, handleVoiceCommandBroadcast)
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await state.channel.track({ role: 'player', clientId: state.clientId });
@@ -128,6 +130,9 @@ function wireButtons() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !document.getElementById('typing-send').disabled) onTypingSend();
   });
+
+  // Push-to-talk voice commands
+  initVoice();
 }
 
 // ---------- Assignment + trainer ----------
@@ -620,6 +625,8 @@ function onBenchTileTap(slot) {
     return;
   }
   const spriteUrl = spriteUrlCacheFor(poke.name);
+  const canHeal = poke.hp != null && poke.maxHp != null && poke.hp < poke.maxHp;
+  const canTakeDmg = poke.hp != null && poke.hp > 0;
   showActionSheet({
     subtitle: `Bench slot ${slot + 1}`,
     name: poke.name,
@@ -629,6 +636,29 @@ function onBenchTileTap(slot) {
         label: state.playerState.active ? 'Swap to active' : 'Make active',
         primary: true,
         onClick: () => promoteBench(slot),
+      },
+      {
+        label: 'Attack',
+        onClick: () => {
+          hideActionSheet();
+          openDamageModal('attack', { type: 'bench', slot });
+        },
+      },
+      {
+        label: 'Heal',
+        disabled: !canHeal,
+        onClick: () => {
+          hideActionSheet();
+          openDamageModal('heal', { type: 'bench', slot });
+        },
+      },
+      {
+        label: 'Take damage',
+        disabled: !canTakeDmg,
+        onClick: () => {
+          hideActionSheet();
+          openDamageModal('take', { type: 'bench', slot });
+        },
       },
       {
         label: 'Replace with new capture',
@@ -836,20 +866,23 @@ function spriteUrlCacheFor(name) {
 
 // ---------- Damage-entry modal (Attack / Heal / Take Damage) ----------
 
-function openDamageModal(mode) {
-  const active = state.playerState.active;
-  if (!active || active.hp == null) return;
+function openDamageModal(mode, target = { type: 'active' }) {
+  const poke = targetPoke(target);
+  if (!poke) return;
+  // Attack doesn't require HP on the source; heal/take require HP to mutate.
+  if ((mode === 'heal' || mode === 'take') && poke.hp == null) return;
   state.damageMode = mode;
+  state.damageTarget = target;
   const modal = document.getElementById('damage-modal');
   modal.classList.remove('attack', 'heal', 'take');
   modal.classList.add(mode);
   const titleMap = { attack: 'Attack', heal: 'Heal', take: 'Take Damage' };
   document.getElementById('damage-modal-title').textContent = titleMap[mode];
-  const activeName = prettifyName(active.name);
+  const pokeName = prettifyName(poke.name);
   const headlineMap = {
-    attack: `${activeName} attacks the opposing Pokemon`,
-    heal: `Heal ${activeName}`,
-    take: `${activeName} takes damage`,
+    attack: `${pokeName} attacks the opposing Pokemon`,
+    heal: `Heal ${pokeName}`,
+    take: `${pokeName} takes damage`,
   };
   document.getElementById('damage-modal-headline').textContent = headlineMap[mode];
   document.getElementById('damage-custom').value = '';
@@ -860,6 +893,7 @@ function openDamageModal(mode) {
 function closeDamageModal() {
   document.getElementById('damage-modal').classList.remove('visible');
   state.damageMode = null;
+  state.damageTarget = null;
 }
 
 function onDamagePreset(val) {
@@ -877,14 +911,26 @@ async function onDamageConfirm() {
   const amount = parseInt(document.getElementById('damage-custom').value, 10);
   if (!(amount > 0)) return;
   const mode = state.damageMode;
+  const target = state.damageTarget || { type: 'active' };
   closeDamageModal();
   if (mode === 'attack') await doAttack(amount);
-  else if (mode === 'heal') await doHeal(amount);
-  else if (mode === 'take') await doTakeDamage(amount);
+  else if (mode === 'heal') await doHealTarget(target, amount);
+  else if (mode === 'take') await doTakeDamageTarget(target, amount);
+}
+
+function targetPoke(target) {
+  if (!target) return null;
+  if (target.type === 'active') return state.playerState.active;
+  if (target.type === 'bench') return state.playerState.bench[target.slot] || null;
+  return null;
+}
+
+function hasAnyPokemon() {
+  return !!state.playerState.active || state.playerState.bench.some(p => p);
 }
 
 async function doAttack(damage) {
-  if (!state.playerState.active) return;
+  if (!hasAnyPokemon()) return;
   const targetPlayer = state.player === 1 ? 2 : 1;
   await state.channel.send({
     type: 'broadcast',
@@ -898,36 +944,43 @@ async function doAttack(damage) {
   console.log(`[capture] Attack → Trainer ${targetPlayer} for ${damage}`);
 }
 
-async function doHeal(amount) {
-  const active = state.playerState.active;
-  if (!active || active.maxHp == null) return;
-  active.hp = Math.min(active.maxHp, (active.hp ?? 0) + amount);
+async function doHealTarget(target, amount) {
+  const poke = targetPoke(target);
+  if (!poke || poke.maxHp == null) return;
+  poke.hp = Math.min(poke.maxHp, (poke.hp ?? 0) + amount);
   persistAndBroadcast();
-  renderDashboardActive();
-  await state.channel.send({
-    type: 'broadcast',
-    event: 'heal_effect',
-    payload: { targetPlayer: state.player, amount },
-  });
-  console.log(`[capture] Heal +${amount}; hp now ${active.hp}/${active.maxHp}`);
+  if (target.type === 'active') renderDashboardActive();
+  else renderDashboardBench();
+  // iPad heal animation is keyed to the active slot only.
+  if (target.type === 'active') {
+    await state.channel.send({
+      type: 'broadcast',
+      event: 'heal_effect',
+      payload: { targetPlayer: state.player, amount },
+    });
+  }
+  console.log(`[capture] Heal ${target.type}${target.slot != null ? ' #' + target.slot : ''} +${amount}; hp now ${poke.hp}/${poke.maxHp}`);
 }
 
-async function doTakeDamage(damage) {
-  const active = state.playerState.active;
-  if (!active || active.hp == null) return;
-  active.hp = Math.max(0, active.hp - damage);
+async function doTakeDamageTarget(target, damage) {
+  const poke = targetPoke(target);
+  if (!poke || poke.hp == null) return;
+  poke.hp = Math.max(0, poke.hp - damage);
   persistAndBroadcast();
-  renderDashboardActive();
-  await state.channel.send({
-    type: 'broadcast',
-    event: 'attack_effect',
-    payload: {
-      attackerPlayer: state.player,
-      targetPlayer: state.player,
-      damage,
-    },
-  });
-  console.log(`[capture] Took ${damage}; hp now ${active.hp}`);
+  if (target.type === 'active') renderDashboardActive();
+  else renderDashboardBench();
+  if (target.type === 'active') {
+    await state.channel.send({
+      type: 'broadcast',
+      event: 'attack_effect',
+      payload: {
+        attackerPlayer: state.player,
+        targetPlayer: state.player,
+        damage,
+      },
+    });
+  }
+  console.log(`[capture] ${target.type}${target.slot != null ? ' #' + target.slot : ''} took ${damage}; hp now ${poke.hp}`);
 }
 
 // Incoming attack — if targeted at us, apply damage and broadcast new state.
@@ -940,6 +993,17 @@ async function handleAttackEffectBroadcast({ payload }) {
   persistAndBroadcast();
   renderDashboardActive();
   console.log(`[capture] Hit for ${damage}; hp now ${active.hp}`);
+}
+
+// Incoming voice command from the iPad (operator held LShift/RShift).
+// Parse and execute locally if it's addressed to this player.
+function handleVoiceCommandBroadcast({ payload }) {
+  const { player, transcript } = payload || {};
+  if (player !== state.player) return;
+  if (!transcript) return;
+  console.log(`[capture] voice_command "${transcript}"`);
+  const parsed = parseVoiceCommand(transcript);
+  executeVoiceCommand(parsed);
 }
 
 // ---------- UI helpers ----------
@@ -1024,6 +1088,245 @@ function normalizePlayerState(raw) {
 
 function prettifyName(name) {
   return name.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+
+// ---------- Push-to-talk voice commands ----------
+//
+// Hold the mic button, speak a command, release to execute. Grammar:
+//   "Go <name>!"            → promote that bench Pokemon to active
+//   "<name>, come back!"    → retreat active to bench
+//   "<name>, attack N HP!"  → attack opponent for N
+//   "<name>, heal N HP!"    → heal named Pokemon (active or bench) by N
+//   "<name>, take N damage" → deal N damage to named Pokemon (active or bench)
+
+const VOICE_NUMBER_WORDS = {
+  ten: 10, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+  sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100,
+};
+
+let voiceToastTimer = null;
+
+function initVoice() {
+  const btn = document.getElementById('voice-btn');
+  if (!btn) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    btn.disabled = true;
+    btn.querySelector('.voice-label').textContent = 'Voice not supported';
+    return;
+  }
+
+  const recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+  recognition.maxAlternatives = 3;
+
+  let listening = false;
+  const setListening = (on) => {
+    listening = on;
+    btn.classList.toggle('listening', on);
+    btn.querySelector('.voice-label').textContent = on ? 'Listening…' : 'Hold to speak';
+  };
+
+  const start = (e) => {
+    e.preventDefault();
+    if (listening) return;
+    try {
+      recognition.start();
+      setListening(true);
+    } catch (err) {
+      // Most common: start() called while a previous session is still ending.
+      console.warn('[voice] start failed:', err);
+    }
+  };
+  const stop = () => {
+    if (!listening) return;
+    try { recognition.stop(); } catch {}
+  };
+
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointercancel', stop);
+  btn.addEventListener('pointerleave', stop);
+  // Block the browser context menu on long-press, which fights push-to-talk.
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  recognition.addEventListener('end', () => setListening(false));
+  recognition.addEventListener('error', (e) => {
+    setListening(false);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showVoiceToast('Microphone access denied. Enable it in Settings.', 'error');
+    } else if (e.error === 'no-speech') {
+      showVoiceToast("Didn't catch that — try again.", 'warn');
+    } else if (e.error !== 'aborted') {
+      console.warn('[voice] recognition error:', e.error);
+    }
+  });
+  recognition.addEventListener('result', (event) => {
+    const alternatives = [];
+    const result = event.results[0];
+    for (let i = 0; i < result.length; i++) alternatives.push(result[i].transcript);
+    // Pick the first alternative that parses into a complete command.
+    let chosen = null;
+    for (const t of alternatives) {
+      const parsed = parseVoiceCommand(t);
+      if (!parsed.error) { chosen = parsed; break; }
+    }
+    if (!chosen) chosen = parseVoiceCommand(alternatives[0] || '');
+    executeVoiceCommand(chosen);
+  });
+}
+
+function parseVoiceCommand(rawTranscript) {
+  const transcript = (rawTranscript || '').trim();
+  if (!transcript) return { error: "didn't catch that", transcript };
+  const clean = transcript.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Intent detection — order matters: check retreat before "take"/"heal"
+  // because "come back" shouldn't be confused with a damage-shaped phrase.
+  let intent = null;
+  if (/\bcome\s+back\b/.test(clean) || /\breturn\b/.test(clean)) intent = 'retreat';
+  else if (/\badd\b/.test(clean)) intent = 'add';
+  else if (/(^|\s)go\b/.test(clean)) intent = 'go';
+  else if (/\battack\b/.test(clean)) intent = 'attack';
+  else if (/\bheal\b/.test(clean)) intent = 'heal';
+  else if (/\btake\b/.test(clean) || /\bdamage\b/.test(clean)) intent = 'take';
+
+  if (!intent) return { error: "couldn't detect a command", transcript };
+
+  const match = (typeof findBestMatchInText === 'function') ? findBestMatchInText(clean) : null;
+  const pokemonName = match?.name || null;
+  if (!pokemonName) {
+    if (typeof pokemonNameSet === 'undefined' || !pokemonNameSet) {
+      return { error: 'Pokemon list still loading', transcript };
+    }
+    return { error: "couldn't find a Pokemon name", transcript };
+  }
+
+  const needsNumber = intent === 'attack' || intent === 'heal' || intent === 'take' || intent === 'add';
+  let number = null;
+  if (needsNumber) {
+    number = extractVoiceNumber(clean);
+    if (number == null) return { error: "couldn't find a number", transcript };
+  }
+
+  return { intent, pokemonName, number, transcript };
+}
+
+function extractVoiceNumber(clean) {
+  const digitMatch = clean.match(/\b(\d{1,3})\b/);
+  if (digitMatch) {
+    const n = parseInt(digitMatch[1], 10);
+    if (n > 0) return n;
+  }
+  for (const word in VOICE_NUMBER_WORDS) {
+    if (new RegExp(`\\b${word}\\b`).test(clean)) return VOICE_NUMBER_WORDS[word];
+  }
+  return null;
+}
+
+function findOwnedPokemon(name) {
+  const needle = name.toLowerCase();
+  const ps = state.playerState;
+  if (ps.active && ps.active.name.toLowerCase() === needle) {
+    return { type: 'active', poke: ps.active };
+  }
+  const slot = ps.bench.findIndex(p => p && p.name.toLowerCase() === needle);
+  if (slot !== -1) return { type: 'bench', slot, poke: ps.bench[slot] };
+  return null;
+}
+
+async function executeVoiceCommand(cmd) {
+  if (!cmd || cmd.error) {
+    const t = cmd?.transcript ? `"${cmd.transcript}" — ` : '';
+    showVoiceToast(`${t}${cmd?.error || 'no command'}`, 'error');
+    return;
+  }
+
+  const pretty = prettifyName(cmd.pokemonName);
+
+  // `add` doesn't require ownership — it creates a new bench entry.
+  if (cmd.intent === 'add') {
+    const slot = firstEmptyBenchSlot();
+    if (slot === -1) {
+      showVoiceToast('Bench is full', 'error');
+      return;
+    }
+    state.playerState.bench[slot] = mkPoke(cmd.pokemonName, cmd.number);
+    persistAndBroadcast();
+    renderDashboardBench();
+    showVoiceToast(`Added ${pretty} (${cmd.number} HP) to bench`, 'ok');
+    return;
+  }
+
+  const owned = findOwnedPokemon(cmd.pokemonName);
+  if (!owned) {
+    showVoiceToast(`You don't have a ${pretty}`, 'error');
+    return;
+  }
+
+  switch (cmd.intent) {
+    case 'go': {
+      if (owned.type === 'active') {
+        showVoiceToast(`${pretty} is already active`, 'warn');
+        return;
+      }
+      promoteBench(owned.slot);
+      showVoiceToast(`Go ${pretty}!`, 'ok');
+      return;
+    }
+    case 'retreat': {
+      if (owned.type === 'bench') {
+        showVoiceToast(`${pretty} is already on the bench`, 'warn');
+        return;
+      }
+      if (firstEmptyBenchSlot() === -1) {
+        showVoiceToast(`Bench is full — ${pretty} can't retreat`, 'error');
+        return;
+      }
+      retreatActive();
+      showVoiceToast(`${pretty} returns!`, 'ok');
+      return;
+    }
+    case 'attack': {
+      await doAttack(cmd.number);
+      showVoiceToast(`${pretty} attacks for ${cmd.number}`, 'ok');
+      return;
+    }
+    case 'heal': {
+      const target = owned.type === 'active' ? { type: 'active' } : { type: 'bench', slot: owned.slot };
+      if (owned.poke.maxHp == null) {
+        showVoiceToast(`${pretty} has no HP set`, 'error');
+        return;
+      }
+      await doHealTarget(target, cmd.number);
+      showVoiceToast(`Healed ${pretty} +${cmd.number}`, 'ok');
+      return;
+    }
+    case 'take': {
+      const target = owned.type === 'active' ? { type: 'active' } : { type: 'bench', slot: owned.slot };
+      if (owned.poke.hp == null) {
+        showVoiceToast(`${pretty} has no HP set`, 'error');
+        return;
+      }
+      await doTakeDamageTarget(target, cmd.number);
+      showVoiceToast(`${pretty} took ${cmd.number}`, 'ok');
+      return;
+    }
+  }
+}
+
+function showVoiceToast(text, kind = 'ok') {
+  const el = document.getElementById('voice-toast');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('ok', 'warn', 'error');
+  el.classList.add(kind, 'visible');
+  if (voiceToastTimer) clearTimeout(voiceToastTimer);
+  voiceToastTimer = setTimeout(() => {
+    el.classList.remove('visible');
+  }, 2500);
 }
 
 init();

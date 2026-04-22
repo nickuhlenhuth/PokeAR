@@ -241,6 +241,52 @@
       padding: 0 24px 16px;
     }
 
+    /* ---------- push-to-talk voice button ---------- */
+    #voice-area {
+      padding: 14px 4px 6px;
+      display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+    }
+    .voice-btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; padding: 16px 18px;
+      background: #1e1e28; color: white;
+      border: 1.5px solid #3a3a45; border-radius: 14px;
+      font-size: 15px; font-weight: 700;
+      cursor: pointer;
+      -webkit-user-select: none; user-select: none;
+      touch-action: none;
+      transition: background 0.12s, border-color 0.12s, transform 0.08s;
+    }
+    .voice-btn .voice-icon { font-size: 22px; line-height: 1; }
+    .voice-btn:active { transform: scale(0.98); }
+    .voice-btn.listening {
+      background: rgba(200, 40, 40, 0.35);
+      border-color: #ff6060;
+      animation: voice-pulse 0.9s ease-in-out infinite;
+    }
+    .voice-btn[disabled] {
+      opacity: 0.45; cursor: not-allowed;
+      background: #15151c; border-style: dashed;
+    }
+    @keyframes voice-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 80, 80, 0.55); }
+      50%      { box-shadow: 0 0 0 10px rgba(255, 80, 80, 0); }
+    }
+    .voice-toast {
+      min-height: 0; max-height: 0; overflow: hidden;
+      text-align: center; font-size: 13px; line-height: 1.35;
+      padding: 0 10px;
+      opacity: 0;
+      transition: opacity 0.18s, max-height 0.18s, padding 0.18s;
+      color: #ccc;
+    }
+    .voice-toast.visible {
+      max-height: 80px; opacity: 1; padding: 4px 10px 0;
+    }
+    .voice-toast.ok    { color: #a6ffb5; }
+    .voice-toast.warn  { color: #ffd280; }
+    .voice-toast.error { color: #ff9e9e; }
+
     /* ---------- camera back button ---------- */
     .topbar-left {
       display: flex; align-items: center; gap: 10px;
@@ -613,6 +659,14 @@
         <div class="bench-tile" data-slot="2">+</div>
         <div class="bench-tile" data-slot="3">+</div>
         <div class="bench-tile" data-slot="4">+</div>
+      </div>
+
+      <div id="voice-area">
+        <button id="voice-btn" class="voice-btn" type="button">
+          <span class="voice-icon">🎤</span>
+          <span class="voice-label">Hold to speak</span>
+        </button>
+        <div id="voice-toast" class="voice-toast"></div>
       </div>
     </div>
 

@@ -17,8 +17,20 @@ const state = {
   playerStates: { 1: null, 2: null }, // last-seen player_state snapshots
 };
 
+// Attack sound effect. Used on every attack for now; future work may swap to
+// per-attack variants by changing the URL lookup in playHitEffect.
+const ATTACK_SFX_URL = 'freesound_crunchpixstudio-attack-fire-384913.mp3';
+const ATTACK_SFX_DURATION_MS = 1020;
+const attackSfx = new Audio(ATTACK_SFX_URL);
+attackSfx.preload = 'auto';
+
+// Defers HP bar + HP text + hp-class updates on the target's nameplate until
+// the attack sound finishes, so the sound doubles as the impact → tally beat.
+const hpLockUntil = { 1: 0, 2: 0 };
+
 function init() {
   ensurePokeballSprite(); // fire-and-forget preload
+  installAudioUnlock();
 
   if (isDemoMode()) loadDemoSprites();
 
@@ -48,6 +60,8 @@ function init() {
         console.log(`[battlefield] subscribed to room:${state.roomId}`);
       }
     });
+
+  initVoiceRelay();
 }
 
 // ---------- Player state → trainer/sprite rendering ----------
@@ -184,6 +198,12 @@ function renderNameplate(player, active) {
   el.classList.add('filled');
   el.querySelector('.np-name').textContent = prettifyName(active.name);
 
+  // While an attack sound is playing for this player, hold the HP readout
+  // (bar width, HP text, hp-low/mid/ko classes) at its pre-attack values so
+  // the damage tally lands when the sound finishes. Name + filled class still
+  // update normally. playHitEffect re-invokes us once the lock expires.
+  if (performance.now() < hpLockUntil[player]) return;
+
   const bar = el.querySelector('.np-bar');
   const barFill = el.querySelector('.np-bar-fill');
   const hpEl = el.querySelector('.np-hp');
@@ -207,10 +227,50 @@ function renderNameplate(player, active) {
 
 // ---------- Hit + heal effects ----------
 
+// Safari (and other browsers) block HTMLAudioElement.play() until the user has
+// interacted with the page. The battlefield view is otherwise passive, so we
+// prime the attack SFX on the first pointerdown/touchstart/keydown anywhere.
+function installAudioUnlock() {
+  const unlock = () => {
+    const p = attackSfx.play();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        attackSfx.pause();
+        attackSfx.currentTime = 0;
+      }).catch(() => {});
+    }
+    document.removeEventListener('pointerdown', unlock);
+    document.removeEventListener('touchstart', unlock);
+    document.removeEventListener('keydown', unlock);
+  };
+  document.addEventListener('pointerdown', unlock, { once: true });
+  document.addEventListener('touchstart', unlock, { once: true });
+  document.addEventListener('keydown', unlock, { once: true });
+}
+
 function playHitEffect(player, damage) {
+  // Visual impact fires immediately so it syncs with the sound's crunch.
   playSpriteHit(player);
   playFlash(player, 'damage');
-  spawnFloatingNumber(player, `-${damage}`, 'damage');
+
+  // Start the sound and hold the damage readout (floating -X and HP bar
+  // decrease) until it finishes.
+  attackSfx.currentTime = 0;
+  const playPromise = attackSfx.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch((e) => console.warn('[battlefield] attackSfx blocked', e));
+  }
+
+  hpLockUntil[player] = performance.now() + ATTACK_SFX_DURATION_MS;
+
+  setTimeout(() => {
+    hpLockUntil[player] = 0;
+    spawnFloatingNumber(player, `-${damage}`, 'damage');
+    // Re-render the nameplate against the latest known state so the HP bar
+    // width animates down now (state was updated in place during the lock).
+    const active = state.playerStates[player]?.active || null;
+    renderNameplate(player, active);
+  }, ATTACK_SFX_DURATION_MS);
 }
 
 function playHealEffect(player, amount) {
@@ -591,6 +651,166 @@ function loadDemoSprites() {
       },
     },
   });
+}
+
+// ---------- Voice relay (Left/Right Shift → broadcast to target phone) ----------
+//
+// Hold Left Shift to send a voice command to Trainer 1, Right Shift for Trainer 2.
+// iPad handles speech-to-text; the transcript is broadcast to the target phone,
+// which parses and executes it with its existing voice command pipeline.
+
+function initVoiceRelay() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    console.warn('[voice-relay] SpeechRecognition unsupported; Shift keybinds disabled');
+    return;
+  }
+
+  const recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+  recognition.maxAlternatives = 3;
+
+  const indicator = buildVoiceIndicator();
+  document.body.appendChild(indicator.root);
+
+  let activePlayer = null;   // which player (1 or 2) is currently being listened for
+  let listening = false;
+
+  const setIndicator = (player, text, kind = 'idle') => {
+    if (!player) { indicator.root.classList.remove('visible'); return; }
+    indicator.root.classList.add('visible');
+    indicator.root.classList.remove('ok', 'warn', 'error');
+    if (kind && kind !== 'idle') indicator.root.classList.add(kind);
+    indicator.label.textContent = `Trainer ${player} · ${player === 1 ? 'LShift' : 'RShift'}`;
+    indicator.transcript.textContent = text || '';
+  };
+
+  const start = (player) => {
+    if (listening) return;
+    activePlayer = player;
+    try {
+      recognition.start();
+      listening = true;
+      setIndicator(player, 'Listening…', 'idle');
+    } catch (err) {
+      console.warn('[voice-relay] start failed:', err);
+      activePlayer = null;
+    }
+  };
+
+  const stop = () => {
+    if (!listening) return;
+    try { recognition.stop(); } catch {}
+  };
+
+  recognition.addEventListener('end', () => {
+    listening = false;
+    // Keep the final transcript visible briefly after release; then hide.
+    setTimeout(() => { if (!listening) setIndicator(null); }, 1200);
+    activePlayer = null;
+  });
+  recognition.addEventListener('error', (e) => {
+    listening = false;
+    const msg = e.error === 'not-allowed' || e.error === 'service-not-allowed'
+      ? 'Mic access denied'
+      : e.error === 'no-speech' ? "Didn't catch that"
+      : `Error: ${e.error}`;
+    if (activePlayer) setIndicator(activePlayer, msg, 'error');
+    setTimeout(() => setIndicator(null), 1800);
+    activePlayer = null;
+  });
+  recognition.addEventListener('result', (event) => {
+    const result = event.results[0];
+    const transcript = (result && result[0] && result[0].transcript || '').trim();
+    const player = activePlayer;
+    if (!transcript || !player) return;
+    setIndicator(player, `"${transcript}"`, 'ok');
+    broadcastVoiceCommand(player, transcript);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Shift' || e.repeat) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+    const player = e.location === 2 ? 2 : e.location === 1 ? 1 : null;
+    if (!player) return;
+    // If a different shift is already active, ignore the second press.
+    if (listening && activePlayer && activePlayer !== player) return;
+    e.preventDefault();
+    start(player);
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if (e.key !== 'Shift') return;
+    const player = e.location === 2 ? 2 : e.location === 1 ? 1 : null;
+    if (!player || player !== activePlayer) return;
+    e.preventDefault();
+    stop();
+  });
+
+  // If focus leaves the window while a shift is held, browsers stop firing keyup.
+  window.addEventListener('blur', () => { if (listening) stop(); });
+
+  console.log('[voice-relay] ready — hold Left/Right Shift to speak for Trainer 1/2');
+}
+
+async function broadcastVoiceCommand(player, transcript) {
+  if (!state.channel) return;
+  await state.channel.send({
+    type: 'broadcast',
+    event: 'voice_command',
+    payload: { player, transcript },
+  });
+  console.log(`[voice-relay] → Trainer ${player}: "${transcript}"`);
+}
+
+function buildVoiceIndicator() {
+  const root = document.createElement('div');
+  root.id = 'voice-indicator';
+  root.innerHTML = `
+    <span class="mic">🎤</span>
+    <span class="label"></span>
+    <span class="transcript"></span>
+  `;
+  const style = document.createElement('style');
+  style.textContent = `
+    #voice-indicator {
+      position: fixed; top: 12px; left: 50%; transform: translate(-50%, -16px);
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 18px;
+      background: rgba(18, 18, 28, 0.88);
+      border: 1px solid rgba(255, 100, 100, 0.55);
+      border-radius: 999px;
+      font: 600 14px -apple-system, BlinkMacSystemFont, sans-serif;
+      color: white;
+      box-shadow: 0 0 14px rgba(255, 60, 60, 0.35);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.12s, transform 0.12s;
+      z-index: 200;
+      max-width: 80vw;
+    }
+    #voice-indicator.visible { opacity: 1; transform: translate(-50%, 0); }
+    #voice-indicator .mic { font-size: 16px; animation: voice-rel-pulse 0.9s ease-in-out infinite; }
+    #voice-indicator .label { font-size: 12px; opacity: 0.85; letter-spacing: 1px; text-transform: uppercase; }
+    #voice-indicator .transcript { color: #ffcb05; }
+    #voice-indicator.ok { border-color: rgba(140, 255, 160, 0.65); box-shadow: 0 0 14px rgba(80, 220, 120, 0.35); }
+    #voice-indicator.ok .transcript { color: #a6ffb5; }
+    #voice-indicator.error { border-color: rgba(255, 120, 120, 0.75); }
+    #voice-indicator.error .transcript { color: #ff9e9e; }
+    @keyframes voice-rel-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+  `;
+  document.head.appendChild(style);
+  return {
+    root,
+    label: root.querySelector('.label'),
+    transcript: root.querySelector('.transcript'),
+  };
 }
 
 init();

@@ -275,25 +275,29 @@
       letter-spacing: 0.3px;
     }
 
-    /* Trainer name badge — lives on the outer edge of the trainer's bench
-       strip, with the trainer avatar stacked just above it. */
+    /* Trainer name ribbon — sits on the outer edge of the trainer's bench
+       strip, with the trainer avatar + pokeball pedestal stacked above it. */
     .slot-trainer {
       position: absolute;
       bottom: 1.5%;
-      height: 10vh;
+      height: 5.5vh;
       width: 10vw;
-      padding: 0 10px;
+      padding: 0 12px;
       display: flex;
       align-items: center;
       justify-content: center;
       text-align: center;
-      background: rgba(0, 0, 0, 0.55);
-      border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      backdrop-filter: blur(8px);
+      background: linear-gradient(180deg, rgba(20, 20, 30, 0.9), rgba(10, 10, 16, 0.9));
+      border-top: 1px solid rgba(255, 215, 120, 0.55);
+      border-bottom: 1px solid rgba(255, 215, 120, 0.55);
+      clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 7px 100%, 0 50%);
       color: white;
-      font-size: 13px;
-      font-weight: 700;
+      font-family: 'Helvetica Neue', system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -307,24 +311,54 @@
 
     .slot-trainer-avatar {
       position: absolute;
-      bottom: calc(1.5% + 10vh + 6px);
+      bottom: calc(1.5% + 5.5vh + 4px);
       width: 10vw;
-      height: 14vh;
-      padding: 4px;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 10px;
-      backdrop-filter: blur(8px);
-      display: flex; align-items: center; justify-content: center;
+      height: 16vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
       opacity: 0;
       transition: opacity 0.3s;
       z-index: 5;
+      pointer-events: none;
     }
     .slot-trainer-avatar.visible { opacity: 1; }
     .slot-trainer-avatar img {
-      max-width: 100%; max-height: 100%;
-      object-fit: contain; image-rendering: pixelated;
-      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+      max-width: 100%;
+      max-height: calc(100% - 14px);
+      object-fit: contain;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.7));
+      transform-origin: bottom center;
+      animation: trainer-bob 2.4s ease-in-out infinite;
+    }
+    .slot-trainer-avatar .pedestal {
+      width: 72%;
+      aspect-ratio: 4 / 1;
+      margin-top: -16px;
+      border-radius: 50%;
+      background: linear-gradient(
+        to bottom,
+        #ee1515 0%,
+        #c41111 44%,
+        #1a1a1a 44%,
+        #1a1a1a 56%,
+        #f0f0f0 56%,
+        #b8b8b8 100%
+      );
+      box-shadow:
+        0 0 28px 6px rgba(255, 60, 60, 0.55),
+        0 8px 14px rgba(0, 0, 0, 0.6);
+      animation: pedestal-glow 2.8s ease-in-out infinite;
+    }
+    @keyframes trainer-bob {
+      0%, 100% { transform: scale(2) translateY(0); }
+      50%      { transform: scale(2) translateY(-1.5px); }
+    }
+    @keyframes pedestal-glow {
+      0%, 100% { box-shadow: 0 0 24px 4px rgba(255, 60, 60, 0.4),  0 8px 14px rgba(0, 0, 0, 0.6); }
+      50%      { box-shadow: 0 0 38px 8px rgba(255, 80, 80, 0.7),  0 8px 14px rgba(0, 0, 0, 0.6); }
     }
     #slot1-trainer-avatar { left: 1.5%; }
     #slot2-trainer-avatar { right: 1.5%; }
@@ -361,60 +395,200 @@
     #rotate-warning .msg { font-size: 16px; font-weight: 600; color: #ddd; }
     #rotate-warning .sub { font-size: 12px; color: #888; margin-top: 6px; }
 
+    /* QR panel styled as a jumbotron broadcast screen, pinned to the top
+       right corner as a square "monitor" display. */
     #qr-panel {
       position: absolute;
       top: 20px;
       right: 20px;
       z-index: 30;
-      background: white;
-      color: #111;
-      padding: 16px;
-      border-radius: 14px;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+      width: min(30vh, 300px);
+      height: min(30vh, 300px);
+      padding: 14px 16px;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #2a3540, #121c26);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+        inset 0 0 0 3px rgba(60, 80, 100, 0.35),
+        0 0 40px 8px rgba(80, 200, 255, 0.35),
+        0 10px 30px rgba(0, 0, 0, 0.75);
       text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
       transition: opacity 0.3s, transform 0.3s;
+      animation: jumbotron-flicker 7s steps(1) infinite;
+    }
+    #qr-panel::before {
+      content: '';
+      position: absolute;
+      inset: 3%;
+      border-radius: 3px;
+      background: linear-gradient(180deg, rgba(0, 40, 60, 0.9), rgba(0, 12, 22, 0.95));
+      box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.7);
+      pointer-events: none;
+      z-index: 0;
+    }
+    #qr-panel::after {
+      content: '';
+      position: absolute;
+      inset: 3%;
+      border-radius: 3px;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent 0 2px,
+        rgba(80, 200, 255, 0.08) 2px 3px
+      );
+      mix-blend-mode: screen;
+      pointer-events: none;
+      z-index: 3;
+    }
+    #qr-panel .label,
+    #qr-code,
+    #room-code,
+    #open-capture {
+      position: relative;
+      z-index: 2;
     }
     #qr-panel.hidden {
       opacity: 0;
-      transform: translateY(-10px);
+      transform: translateY(-12px) scale(0.97);
       pointer-events: none;
     }
+
+    .jumbotron-live {
+      position: absolute;
+      top: 6%;
+      right: 7%;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font: 700 clamp(7px, 1vh, 9px)/1 ui-monospace, 'Courier New', monospace;
+      letter-spacing: 1.8px;
+      color: rgba(255, 80, 80, 0.95);
+      text-shadow: 0 0 5px rgba(255, 50, 50, 0.6);
+      pointer-events: none;
+    }
+    .jumbotron-live::before {
+      content: '';
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #ff3030;
+      box-shadow: 0 0 8px rgba(255, 50, 50, 0.9);
+      animation: live-blink 1.3s ease-in-out infinite;
+    }
+
+    .jumbotron-scan-line {
+      position: absolute;
+      left: 5%; right: 5%;
+      top: 8%;
+      height: 3px;
+      border-radius: 2px;
+      background: linear-gradient(90deg, transparent, rgba(120, 230, 255, 0.9), transparent);
+      filter: blur(1.5px);
+      box-shadow: 0 0 12px rgba(120, 230, 255, 0.7);
+      mix-blend-mode: screen;
+      pointer-events: none;
+      z-index: 4;
+      animation: qr-scan 3.5s linear infinite;
+    }
+
+    @keyframes qr-scan {
+      0%   { top: 8%;  opacity: 0; }
+      12%  { opacity: 1; }
+      88%  { opacity: 1; }
+      100% { top: 92%; opacity: 0; }
+    }
+    @keyframes live-blink {
+      0%, 70%, 100% { opacity: 1; }
+      75%, 85%      { opacity: 0.25; }
+    }
+    @keyframes jumbotron-flicker {
+      0%, 93%, 95%, 97%, 100% { filter: none; }
+      94%                     { filter: brightness(0.7); }
+      96%                     { filter: brightness(1.25); }
+    }
+
     #qr-panel .label {
-      font-size: 11px;
+      font-family: ui-monospace, 'Courier New', monospace;
+      font-size: clamp(8px, 1.1vh, 10px);
       text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: #666;
-      margin-bottom: 6px;
+      letter-spacing: 2.5px;
+      color: rgba(100, 220, 255, 0.9);
+      text-shadow: 0 0 8px rgba(80, 200, 255, 0.55);
+      margin: 0;
     }
     #qr-code {
-      width: 200px;
-      height: 200px;
+      width: 62%;
+      aspect-ratio: 1;
+      height: auto;
       margin: 0 auto;
+      padding: 4%;
+      background: white;
+      border-radius: 2px;
+      box-sizing: border-box;
+      overflow: hidden;
+      box-shadow:
+        inset 0 0 0 1px rgba(120, 220, 255, 0.45),
+        0 0 14px rgba(80, 200, 255, 0.35);
     }
-    #qr-code img, #qr-code canvas { display: block; margin: 0 auto; }
+    #qr-code::before,
+    #qr-code::after {
+      content: '';
+      position: absolute;
+      width: 10px; height: 10px;
+      border: 2px solid rgba(120, 220, 255, 0.9);
+      pointer-events: none;
+    }
+    #qr-code::before {
+      top: -4px; left: -4px;
+      border-right: none; border-bottom: none;
+    }
+    #qr-code::after {
+      bottom: -4px; right: -4px;
+      border-left: none; border-top: none;
+    }
+    #qr-code > *:not(img) { display: none !important; }
+    #qr-code img {
+      display: block !important;
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: contain !important;
+      margin: 0 auto !important;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
     #room-code {
-      margin-top: 10px;
+      margin: 0;
       font-family: ui-monospace, Menlo, monospace;
-      font-size: 18px;
+      font-size: clamp(11px, 1.6vh, 16px);
       font-weight: 700;
-      letter-spacing: 2px;
+      letter-spacing: 2.5px;
+      color: rgba(140, 230, 255, 0.95);
+      text-shadow: 0 0 10px rgba(80, 200, 255, 0.6);
     }
     #open-capture {
       display: block;
-      margin: 10px auto 0;
-      padding: 6px 10px;
-      font-size: 10px;
+      margin: 0 auto;
+      padding: 3px 7px;
+      font-size: clamp(7px, 0.9vh, 9px);
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 1px;
-      color: #888;
+      letter-spacing: 1.3px;
+      color: rgba(120, 220, 255, 0.75);
       background: transparent;
-      border: 1px dashed #bbb;
-      border-radius: 4px;
+      border: 1px dashed rgba(120, 220, 255, 0.4);
+      border-radius: 3px;
       text-decoration: none;
       text-align: center;
     }
-    #open-capture:hover { color: #333; border-color: #666; }
+    #open-capture:hover {
+      color: rgba(200, 245, 255, 1);
+      border-color: rgba(180, 240, 255, 0.9);
+    }
 
     #setup-overlay {
       position: fixed; inset: 0; z-index: 100;
@@ -472,8 +646,8 @@
   <div class="bench-slot" data-player="2" data-slot="4"></div>
 </div>
 
-<div id="slot1-trainer-avatar" class="slot-trainer-avatar"><img alt="" /></div>
-<div id="slot2-trainer-avatar" class="slot-trainer-avatar"><img alt="" /></div>
+<div id="slot1-trainer-avatar" class="slot-trainer-avatar"><img alt="" /><div class="pedestal"></div></div>
+<div id="slot2-trainer-avatar" class="slot-trainer-avatar"><img alt="" /><div class="pedestal"></div></div>
 <div id="slot1-trainer" class="slot-trainer">—</div>
 <div id="slot2-trainer" class="slot-trainer">—</div>
 <div id="slot1-status" class="slot-status">Waiting for Trainer 1…</div>
@@ -489,6 +663,8 @@
 </div>
 
 <div id="qr-panel">
+  <div class="jumbotron-live">LIVE</div>
+  <div class="jumbotron-scan-line"></div>
   <div class="label">Scan to join</div>
   <div id="qr-code"></div>
   <div id="room-code">------</div>
